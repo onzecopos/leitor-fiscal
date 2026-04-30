@@ -756,21 +756,20 @@ async function parsePDF(file) {
         item = null;
       } else if (inicio) {
         if (item) itens.push(item);
-        item = { codigo:l.cod, descricao:l.desc, qtd:l.qtd||0, unit:l.unit||0, tot:0 };
+        item = { codigo:l.cod, descricao:l.desc, quantidade:0, valorUnitario:0, valorTotal:0, ncm:'', cfop:'', unidade:'UN', desconto:0 };
       } else if (valores) {
         if (item) {
           if (l.desc) item.descricao += (item.descricao?' ':'')+l.desc;
-          item.qtd=l.qtd; item.unit=l.unit; item.tot=l.tot;
+          item.quantidade=l.qtd; item.valorUnitario=l.unit; item.valorTotal=l.tot;
           itens.push(item); item=null;
         }
       } else if (soDesc) {
         if (item) {
           item.descricao += (item.descricao?' ':'')+l.desc;
         }
-        // Se não tem item aberto, desc orphan — ignora
       }
     }
-    if (item && item.tot > 0) itens.push(item);
+    if (item && item.valorTotal > 0) itens.push(item);
   }
 
   return {
