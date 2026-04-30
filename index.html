@@ -706,18 +706,20 @@ async function parsePDF(file) {
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
-    // Estratégia baseada no padrão observado no debug:
-    // O pdf.js quebra itens longos em múltiplas linhas onde:
-    // - Linha principal: [xCod: cod_parte1] [xDesc: desc_parte1] [xQtd: qtd] [xUnit: val] [xTotal: val]
-    // - Linhas extras:   [xCod: cod_parte2?] [xDesc: desc_parte2?] (sem valores)
-    // Regra: acumula linhas consecutivas sem valores no item atual.
-    // Só abre novo item quando encontra um token em xCod que NÃO é continuação do código anterior.
+    // Parser de itens baseado nos padrões reais do debug.
+    // Cada item pode ocupar várias linhas. Uma linha pode ser:
+    // A) Completa: tem código + desc + qtd + valores → item fechado
+    // B) Início:   tem código + desc (sem valores) → abre item
+    // C) Valores:  tem qtd + valores (sem código) → fecha item aberto
+    // D) Desc:     só descrição → acumula no item aberto
+    // E) Sufixo:   só código pequeno (resto do código longo) → acumula no item aberto OU descarta
+    //
+    // Regra chave: linha sem valores SÓ acumula se o item atual ainda está aberto (sem tot).
+    // Linha sem valores com item já fechado → descarta (é sufixo órfão como "82", "280" etc.)
 
-    // Pré-processa: une fragmentos de código (ex: "3138965" + "82" = "313896582")
-    // e fragmentos de descrição nas linhas sem valor
-    const blocos = []; // cada bloco = um item completo
-
+    const blocos = [];
     let bAtual = null;
+
     for (const linha of secao) {
       if (!linha.texto || isLixo(linha.texto)) continue;
 
@@ -726,46 +728,52 @@ async function parsePDF(file) {
         if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str);
       });
 
-      const codTxt   = cols.cod.join('').trim();
-      const descTxt  = cols.desc.join(' ').trim();
-      const totalV   = extraiVal(cols.total);
-      const unitV    = extraiVal(cols.unit);
-      const qtdV     = extraiQtd(cols.qtd);
-      const temValor = totalV > 0 || unitV > 0;
-      const temCod   = /^\d+$/.test(codTxt) && codTxt.length > 0;
-      const temQtd   = qtdV > 0;
+      const codTxt  = cols.cod.join('').trim();
+      const descTxt = cols.desc.join(' ').trim();
+      const totalV  = extraiVal(cols.total);
+      const unitV   = extraiVal(cols.unit);
+      const qtdV    = extraiQtd(cols.qtd);
+      const temQtd  = qtdV > 0;
+      const temTot  = totalV > 0;
 
-      if (temValor && temQtd) {
-        // Linha com valores — fecha o bloco atual ou cria novo completo
-        if (bAtual && !bAtual.fechado) {
-          // Complementa bloco aberto com valores
+      if (temTot && temQtd) {
+        // Linha com valores completos
+        if (bAtual && bAtual.tot === 0) {
+          // Fecha bloco aberto
           if (codTxt) bAtual.cod += codTxt;
-          if (descTxt) bAtual.desc += (bAtual.desc ? ' ' : '') + descTxt;
-          bAtual.qtd  = qtdV;
-          bAtual.unit = unitV;
-          bAtual.tot  = totalV;
-          bAtual.fechado = true;
+          if (descTxt) bAtual.desc += (bAtual.desc?' ':'')+descTxt;
+          bAtual.qtd = qtdV; bAtual.unit = unitV; bAtual.tot = totalV;
+          blocos.push(bAtual); bAtual = null;
         } else {
-          // Bloco anterior já fechado — salva e abre novo
+          // Novo item completo numa linha
           if (bAtual) blocos.push(bAtual);
-          bAtual = { cod: codTxt, desc: descTxt, qtd: qtdV, unit: unitV, tot: totalV, fechado: true };
+          blocos.push({ cod:codTxt, desc:descTxt, qtd:qtdV, unit:unitV, tot:totalV });
+          bAtual = null;
         }
-      } else {
+      } else if (!temTot && !temQtd) {
         // Linha sem valores
-        if (bAtual && !bAtual.fechado) {
-          // Bloco aberto — acumula (fragmento de código longo ou desc quebrada)
+        if (bAtual && bAtual.tot === 0) {
+          // Item ainda aberto — acumula fragmentos
           if (codTxt) bAtual.cod += codTxt;
-          if (descTxt) bAtual.desc += (bAtual.desc ? ' ' : '') + descTxt;
-        } else {
-          // Bloco fechado ou inexistente — inicia novo bloco
+          if (descTxt) bAtual.desc += (bAtual.desc?' ':'')+descTxt;
+        } else if (codTxt || descTxt) {
+          // Item fechado ou inexistente — inicia novo bloco
           if (bAtual) blocos.push(bAtual);
-          bAtual = { cod: codTxt, desc: descTxt, qtd: 0, unit: 0, tot: 0, fechado: false };
+          bAtual = { cod:codTxt, desc:descTxt, qtd:0, unit:0, tot:0 };
+        }
+        // Se não tem nada útil, ignora
+      } else if (temQtd && !temTot) {
+        // Tem qtd mas não total — acumula qtd no bloco aberto
+        if (bAtual && bAtual.tot === 0) {
+          if (codTxt) bAtual.cod += codTxt;
+          if (descTxt) bAtual.desc += (bAtual.desc?' ':'')+descTxt;
+          if (!bAtual.qtd) bAtual.qtd = qtdV;
+          if (!bAtual.unit) bAtual.unit = unitV;
         }
       }
     }
-    if (bAtual && bAtual.fechado) blocos.push(bAtual);
+    if (bAtual && bAtual.tot > 0) blocos.push(bAtual);
 
-    // Converte blocos em itens
     for (const b of blocos) {
       if (b.tot > 0 && b.qtd > 0) {
         itens.push({
