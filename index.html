@@ -588,17 +588,21 @@ async function parsePDF(file) {
                  texto.match(/\b(\d{44})\b/);
   if (mChave) chave = mChave[1].replace(/\s/g,'');
 
-  // CNPJ — formato obrigatório XX.XXX.XXX/XXXX-XX (com pontuação)
-  // Ignora sequências que fazem parte da chave de acesso
+  // CNPJ — formato XX.XXX.XXX/XXXX-XX (aceita espaço após o traço por quebra de linha no PDF)
   let cnpj = '';
-  const cnpjFormatado = /\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})\b/;
+  const cnpjFormatado = /\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\s*\d{2})\b/;
   for (const l of linhas) {
     const m = l.match(cnpjFormatado);
     if (m) {
-      // confirma que não é parte da chave
       const digits = m[1].replace(/\D/g,'');
-      if (!chave.includes(digits)) { cnpj = m[1]; break; }
+      if (!chave.includes(digits)) { cnpj = m[1].replace(/\s/g,''); break; }
     }
+  }
+  // fallback: busca no texto corrido (concatena linhas adjacentes para pegar CNPJs quebrados)
+  if (!cnpj) {
+    const textoJunto = texto.replace(/\n/g,' ');
+    const m = textoJunto.match(/\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\s*\d{2})\b/);
+    if (m) cnpj = m[1].replace(/\s/g,'');
   }
 
   // Nome do emissor — pode estar na mesma linha que o CNPJ ("Nome - CNPJ: XX")
