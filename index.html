@@ -706,72 +706,76 @@ async function parsePDF(file) {
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
-    // Abordagem por largura de coluna de descrição:
-    // Calcula quantos px a coluna de descrição tem e estima o limite de caracteres.
-    // Se a desc de uma linha preenche quase toda a coluna, a próxima linha é continuação.
-    const larguraDesc = xQtd - xDesc; // px disponíveis para descrição
-    // Cada caractere ocupa aproximadamente larguraDesc / maxChars pixels
-    // Descoberto empiricamente: coluna ~76px, fonte ~6px/char ≈ 12 chars
-    // Usamos uma heurística: se a desc tem >= 80% dos chars do maior desc visto, é truncada
-    // Abordagem mais simples e robusta: linha de continuação = tem x=xDesc mas NÃO tem xCod nem valores
+    // Parser final — baseado nos padrões exatos do debug:
+    //
+    // Padrão A (item numa linha): [xCod:cod] [xDesc:desc] [xQtd:qtd] [xUnit:val] [xTotal:val]
+    // Padrão B (desc quebrada):   linha acima + [xDesc:desc_cont] na linha seguinte
+    // Padrão C (desc antes cod):  [xDesc:desc] sozinha, depois [xCod:cod] [xQtd:qtd] [valores]
+    // Padrão D (sufixo código):   [xCod:sufixo_num] sozinho (sem desc, sem valores) → ignorar
+    // Padrão E (valores separados): [xQtd:qtd] [valores] sem código (fecha item aberto)
+    //
+    // Pré-processamento: classifica cada linha
 
-    // Primeiro passo: identificar quais linhas são "sufixos de código" (ex: "82", "055", "280")
-    // Sufixo de código = linha com APENAS token em xCod (número curto), sem desc e sem valores
-    // Estas linhas devem ser IGNORADAS pois o código já foi capturado na linha principal
-
-    const isSufixoCodigo = (l) => {
+    const classifica = (linha) => {
       const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
-      l.tokens.forEach(t => { if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str); });
-      const temDesc  = cols.desc.length > 0;
-      const temValor = extraiVal(cols.total) > 0 || extraiVal(cols.unit) > 0;
-      const temQtd   = extraiQtd(cols.qtd) > 0;
-      const codTxt   = cols.cod.join('').trim();
-      const ehNumero = /^\d+$/.test(codTxt);
-      // É sufixo se: tem código numérico, sem descrição própria, sem valores, sem qtd
-      return ehNumero && !temDesc && !temValor && !temQtd;
+      linha.tokens.forEach(t => { if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str); });
+      const cod   = cols.cod.join('').trim();
+      const desc  = cols.desc.join(' ').trim();
+      const tot   = extraiVal(cols.total);
+      const unit  = extraiVal(cols.unit);
+      const qtd   = extraiQtd(cols.qtd);
+      const numCod = /^\d+$/.test(cod);
+      return { cod, desc, tot, unit, qtd, numCod,
+        temCod: numCod && cod.length > 0,
+        temVal: tot > 0,
+        temQtd: qtd > 0,
+        soDesc: !numCod && desc.length > 0 && tot === 0 && qtd === 0,
+        sufixo: numCod && desc.length === 0 && tot === 0 && qtd === 0,
+      };
     };
 
-    // Segundo passo: montar itens linha a linha
-    // Regra: linha com valores fecha item. Linha só com desc (x=xDesc, sem xCod) = continuação.
+    const linhasInfo = secao
+      .filter(l => l.texto && !isLixo(l.texto))
+      .map(l => ({ ...classifica(l), y: l.y }));
+
     const blocos = [];
     let bAtual = null;
 
-    for (const linha of secao) {
-      if (!linha.texto || isLixo(linha.texto)) continue;
-      if (isSufixoCodigo(linha)) continue; // ignora sufixos de código
+    for (let i = 0; i < linhasInfo.length; i++) {
+      const l = linhasInfo[i];
 
-      const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
-      linha.tokens.forEach(t => { if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str); });
+      // Ignora sufixos de código numérico sem desc e sem valores
+      if (l.sufixo) continue;
 
-      const codTxt  = cols.cod.join('').trim();
-      const descTxt = cols.desc.join(' ').trim();
-      const totalV  = extraiVal(cols.total);
-      const unitV   = extraiVal(cols.unit);
-      const qtdV    = extraiQtd(cols.qtd);
-      const temQtd  = qtdV > 0;
-      const temTot  = totalV > 0;
-      const temCod  = /^\d+$/.test(codTxt) && codTxt.length > 0;
-
-      if (temTot && temQtd) {
-        if (bAtual && bAtual.tot === 0) {
-          // Fecha bloco aberto com os valores desta linha
-          if (descTxt) bAtual.desc += (bAtual.desc?' ':'')+descTxt;
-          bAtual.qtd=qtdV; bAtual.unit=unitV; bAtual.tot=totalV;
-          blocos.push(bAtual); bAtual=null;
-        } else {
-          // Item completo numa linha
+      if (l.temVal && l.temQtd) {
+        if (l.temCod) {
+          // Item completo ou início+valores na mesma linha
           if (bAtual) blocos.push(bAtual);
-          blocos.push({cod:codTxt, desc:descTxt, qtd:qtdV, unit:unitV, tot:totalV});
-          bAtual=null;
+          bAtual = { cod:l.cod, desc:l.desc, qtd:l.qtd, unit:l.unit, tot:l.tot };
+          blocos.push(bAtual); bAtual = null;
+        } else {
+          // Só valores — fecha item aberto
+          if (bAtual && bAtual.tot === 0) {
+            if (l.desc) bAtual.desc += (bAtual.desc?' ':'')+l.desc;
+            bAtual.qtd=l.qtd; bAtual.unit=l.unit; bAtual.tot=l.tot;
+            blocos.push(bAtual); bAtual = null;
+          }
         }
-      } else if (temCod && !temTot) {
-        // Linha com código mas sem valores = início de novo item
+      } else if (l.temCod && !l.temVal) {
+        // Código sem valores — início de item
+        // Verifica se linha anterior (só desc) pertence a este item
         if (bAtual) blocos.push(bAtual);
-        bAtual = {cod:codTxt, desc:descTxt, qtd:qtdV||0, unit:unitV||0, tot:0};
-      } else if (!temCod && !temTot && descTxt) {
-        // Só descrição = continuação do item atual
+        bAtual = { cod:l.cod, desc:l.desc, qtd:l.qtd||0, unit:l.unit||0, tot:0 };
+      } else if (l.soDesc) {
+        // Só descrição — pertence ao item aberto atual
         if (bAtual) {
-          bAtual.desc += (bAtual.desc?' ':'')+descTxt;
+          bAtual.desc += (bAtual.desc?' ':'')+l.desc;
+        } else {
+          // Não há item aberto — pode ser desc que precede um código
+          // Guarda temporariamente e associa ao próximo item
+          if (bAtual === null) {
+            bAtual = { cod:'', desc:l.desc, qtd:0, unit:0, tot:0, pendente:true };
+          }
         }
       }
     }
