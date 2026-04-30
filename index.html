@@ -731,39 +731,54 @@ async function parsePDF(file) {
     // (independente de ter código ou não).
     // Todas as linhas SEM valor são acumuladas até encontrar uma linha COM valor.
 
-    let acum = { cod:'', desc:'', qtd:0, unit:0, tot:0 };
+    let acum = { cod:'', desc:'', qtd:0, unit:0, tot:0, lastY:0 };
+    let ultimoItem = null; // referência ao último item adicionado
 
     const flush = () => {
       if (acum.tot > 0 && acum.qtd > 0) {
-        itens.push({
+        const novoItem = {
           codigo: acum.cod, descricao: acum.desc.trim(),
           ncm:'', cfop:'', unidade:'UN',
           quantidade: acum.qtd, valorUnitario: acum.unit,
           valorTotal: acum.tot, desconto: 0,
-        });
+        };
+        itens.push(novoItem);
+        ultimoItem = novoItem;
       }
-      acum = { cod:'', desc:'', qtd:0, unit:0, tot:0 };
+      acum = { cod:'', desc:'', qtd:0, unit:0, tot:0, lastY:0 };
     };
 
     for (const r of rows) {
       if (r.tot > 0) {
-        // Linha com valor — fecha o item atual acumulando esta linha
+        // Linha com valor — fecha o item acumulado
         acum.cod  += r.cod;
         if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
         if (!acum.qtd) acum.qtd = r.qtd;
         if (!acum.unit) acum.unit = r.unit;
         acum.tot = r.tot;
+        acum.lastY = r.y;
         flush();
       } else {
-        // Linha sem valor — acumula
-        // Mas se já temos um acum completo pendente (não deveria acontecer), flush
-        acum.cod  += r.cod;
-        if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
-        if (!acum.qtd && r.qtd) acum.qtd = r.qtd;
-        if (!acum.unit && r.unit) acum.unit = r.unit;
+        // Linha sem valor
+        // Se estamos logo após um item fechado (dy pequeno ≤ 8px) e o acum está vazio,
+        // essa linha é continuação da descrição do item anterior
+        const dyUltimo = ultimoItem && acum.cod==='' && acum.desc==='' 
+          ? r.y - acum.lastY 
+          : 999;
+        
+        if (dyUltimo <= 8 && ultimoItem) {
+          // Continuação do item já fechado — adiciona à descrição do item anterior
+          if (r.desc) ultimoItem.descricao = (ultimoItem.descricao + ' ' + r.desc).trim();
+        } else {
+          // Acumula para o próximo item
+          acum.cod  += r.cod;
+          if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
+          if (!acum.qtd && r.qtd) acum.qtd = r.qtd;
+          if (!acum.unit && r.unit) acum.unit = r.unit;
+          acum.lastY = r.y;
+        }
       }
     }
-    // Não faz flush final pois itens sem valor são fragmentos orphan
   }
 
   return {
