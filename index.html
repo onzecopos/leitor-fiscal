@@ -670,38 +670,31 @@ async function parsePDF(file) {
     const fim = idxF>=0 ? idxF : linhas.length;
     const secao = linhas.slice(idxH+1, fim);
 
-    // Detecta posições X das colunas dinamicamente pelo cabeçalho
-    let xCod=0, xDesc=0, xQtd=0, xUnit=0, xTotal=0;
+    // Usa a posição X de cada token do cabeçalho pela ordem: Cod, Desc, Qtd, Unit, Total
+    // O debug confirmou que chegam sempre nessa ordem
     const hTokens = linhas[idxH].tokens;
-    // Une tokens próximos para reconstruir "Valor Unit." e "Valor Total"
-    for (let i=0; i<hTokens.length; i++) {
-      const s = hTokens[i].str;
-      const x = hTokens[i].x;
-      const prox = hTokens[i+1]?.str||'';
-      if (/^c[oó]d/i.test(s))                          xCod   = x;
-      else if (/^desc/i.test(s))                        xDesc  = x;
-      else if (/^qtd/i.test(s))                         xQtd   = x;
-      else if (/^valor$/i.test(s) && /unit/i.test(prox)) xUnit  = x;
-      else if (/^valor$/i.test(s) && /total/i.test(prox)) xTotal = x;
-      else if (/^valor\s*unit/i.test(s))                xUnit  = x;
-      else if (/^valor\s*tot/i.test(s))                 xTotal = x;
-      else if (/^unit/i.test(s) && xUnit===0)           xUnit  = x;
-      else if (/^total/i.test(s) && xTotal===0)         xTotal = x;
-    }
-    // Fallback pelos valores encontrados no debug caso algum não detecte
-    if (!xCod)   xCod   = hTokens[0]?.x || 12;
-    if (!xDesc)  xDesc  = hTokens[1]?.x || 41;
-    if (!xQtd)   xQtd   = hTokens[2]?.x || 117;
-    if (!xUnit)  xUnit  = hTokens[hTokens.length-2]?.x || 146;
-    if (!xTotal) xTotal = hTokens[hTokens.length-1]?.x || 194;
+    // Filtra tokens únicos por posição (remove duplicatas próximas)
+    const hUniq = [];
+    hTokens.forEach(t => {
+      if (!hUniq.length || t.x - hUniq[hUniq.length-1].x > 10) hUniq.push(t);
+    });
+    // Garante pelo menos 5 colunas
+    while (hUniq.length < 5) hUniq.push({ x: (hUniq[hUniq.length-1]?.x||0) + 40, str:'' });
 
-    // Tolerância de 12px para cada coluna
-    const TOL = 12;
-    const emCod   = x => x >= xCod-TOL   && x < xDesc-TOL;
-    const emDesc  = x => x >= xDesc-TOL  && x < xQtd-TOL;
-    const emQtd   = x => x >= xQtd-TOL   && x < xUnit-TOL;
-    const emUnit  = x => x >= xUnit-TOL  && x < xTotal-TOL;
-    const emTotal = x => x >= xTotal-TOL;
+    const xCod   = hUniq[0].x;
+    const xDesc  = hUniq[1].x;
+    const xQtd   = hUniq[2].x;
+    const xUnit  = hUniq[3].x;
+    const xTotal = hUniq[4].x;
+
+    // Classifica token na coluna pela faixa X
+    const colDe = x => {
+      if (x < xDesc - 5)  return 'cod';
+      if (x < xQtd  - 5)  return 'desc';
+      if (x < xUnit  - 5)  return 'qtd';
+      if (x < xTotal - 5)  return 'unit';
+      return 'total';
+    };
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
@@ -712,18 +705,14 @@ async function parsePDF(file) {
       const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
       linha.tokens.forEach(t => {
         if (isLixo(t.str)) return;
-        if      (emCod(t.x))   cols.cod.push(t.str);
-        else if (emDesc(t.x))  cols.desc.push(t.str);
-        else if (emQtd(t.x))   cols.qtd.push(t.str);
-        else if (emUnit(t.x))  cols.unit.push(t.str);
-        else if (emTotal(t.x)) cols.total.push(t.str);
+        cols[colDe(t.x)].push(t.str);
       });
 
       const codigoStr = cols.cod.join('').trim();
       const temCodigo = /^\d{3,}$/.test(codigoStr);
       const unitVal   = cols.unit.filter(s=>s!=='R$'&&s!=='$').join('').replace(/\./g,'').replace(',','.');
       const totalVal  = cols.total.filter(s=>s!=='R$'&&s!=='$').join('').replace(/\./g,'').replace(',','.');
-      const qtdVal    = cols.qtd.filter(s=>!/R/.test(s)).join('').trim();
+      const qtdVal    = cols.qtd.filter(s=>!/^R/.test(s)).join('').trim();
 
       if (temCodigo) {
         if (item && item.valorTotal > 0) itens.push(item);
@@ -738,7 +727,6 @@ async function parsePDF(file) {
         };
         if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
       } else if (item) {
-        // continuação: acumula descrição e fecha com valores quando chegarem
         if (cols.desc.length) item.descricao += ' ' + cols.desc.join(' ');
         if (qtdVal && !item.quantidade) item.quantidade = parseFloat(qtdVal);
         if (unitVal && !item.valorUnitario) item.valorUnitario = parseFloat(unitVal);
