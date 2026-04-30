@@ -395,13 +395,13 @@ tbody tr:hover td{background:var(--blue-ll);}
               <th>Nº</th>
               <th>Emissão / Saída</th>
               <th class="tr">Valor</th>
-              <th>Arquivo</th>
+              <th>Chave de Acesso</th>
               <th>Consulta</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="docs-body">
-            <tr class="empty-row"><td colspan="9">Nenhum documento importado ainda.</td></tr>
+            <tr class="empty-row"><td colspan="10">Nenhum documento importado ainda.</td></tr>
           </tbody>
         </table>
       </div>
@@ -700,14 +700,11 @@ function getFilteredDocs(){
 }
 
 function consultaURL(d) {
-  // NFC-e por UF — monta URL do portal da Fazenda estadual com a chave
   if (!d.chave || d.chave.length !== 44) return '';
-  const uf = d.uf || (d.cnpj ? '' : '');
-  // Detecta UF pela chave (posições 0-1 = cUF)
   const cUF = d.chave.slice(0,2);
   const portais = {
     '35':'https://www.nfce.fazenda.sp.gov.br/consulta',
-    '33':'http://www.nfce.fazenda.rj.gov.br/consulta',
+    '33':'https://consultadfe.fazenda.rj.gov.br/consultaDFe/paginas/consultaChaveAcesso.faces',
     '41':'https://www.nfce.fazenda.pr.gov.br/nfce/consulta',
     '43':'https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx',
     '31':'https://nfce.fazenda.mg.gov.br/portalnfce',
@@ -733,14 +730,13 @@ function consultaURL(d) {
     '12':'https://www.sefaznet.ac.gov.br/nfce/consulta',
     '27':'https://www.nfce.sefaz.al.gov.br/consulta',
   };
-  const base = portais[cUF] || 'https://www.nfce.fazenda.sp.gov.br/consulta';
-  return `${base}?chNFe=${d.chave}`;
+  return portais[cUF] || '';
 }
 
 function renderDocs(){
   const filtered=getFilteredDocs();
   const body=document.getElementById('docs-body');
-  if(!filtered.length){body.innerHTML='<tr class="empty-row"><td colspan="9">Nenhum documento encontrado.</td></tr>';return;}
+  if(!filtered.length){body.innerHTML='<tr class="empty-row"><td colspan="10">Nenhum documento encontrado.</td></tr>';return;}
   body.innerHTML=filtered.map(d=>{
     const bc=d.fonte==='PDF'?'b-pdf':d.tipo==='NFC-e'?'b-nfce':'b-nfe';
     const d2=d.dataSaida&&d.dataSaida!==d.dataEmissao;
@@ -748,14 +744,23 @@ function renderDocs(){
     const linkCell=url
       ? `<td><a href="${url}" target="_blank" style="font-size:12px;color:var(--blue-d);text-decoration:none;font-weight:600;white-space:nowrap;" title="Consultar no portal da Fazenda">🔗 consultar</a></td>`
       : `<td style="color:var(--light);font-size:12px;">—</td>`;
+    const chaveCell = d.chave
+      ? `<td>
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="mono" style="font-size:10px;color:var(--muted);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${d.chave}">${d.chave.slice(0,20)}…</span>
+            <button class="btn sm" style="flex-shrink:0;padding:3px 8px;font-size:11px;" title="Copiar chave de acesso"
+              onclick="navigator.clipboard.writeText('${d.chave}').then(()=>toast('Chave copiada!','ok'))">📋</button>
+          </div>
+        </td>`
+      : `<td style="color:var(--light);font-size:12px;">—</td>`;
     return `<tr>
       <td><span class="badge ${bc}">${d.tipo}</span></td>
-      <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.emissor||'—'}</td>
+      <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.emissor||'—'}</td>
       <td class="mono">${fmtCNPJ(d.cnpj)}</td>
       <td class="mono" style="color:var(--muted)">${d.numero||'—'}</td>
       <td><div class="two-d"><span class="d1">${fmtD(d.dataEmissao)}</span>${d2?`<span class="d2">↳ saída: ${fmtD(d.dataSaida)}</span>`:''}</div></td>
       <td class="tr mono" style="font-weight:600;color:var(--blue-d)">${brl(d.valorNota)}</td>
-      <td style="font-size:11px;color:var(--light);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.arquivo}</td>
+      ${chaveCell}
       ${linkCell}
       <td><button class="btn sm" onclick="openPanel('${d.id}')">ver</button></td>
     </tr>`;
@@ -808,8 +813,13 @@ function openPanel(id){
       </tr>`).join('')}</tbody></table></div>`:''}
     ${d.pags.length?`<div class="psec"><div class="psec-title">Pagamentos</div>
       ${d.pags.map(p=>`<div class="t-row"><span>${p.tipo}</span><span>${brl(p.valor)}</span></div>`).join('')}</div>`:''}
-    ${d.chave?`<div class="psec"><div class="psec-title">Chave de Acesso</div><div class="chave">${d.chave}</div>
-      ${consultaURL(d)?`<a href="${consultaURL(d)}" target="_blank" style="display:inline-block;margin-top:10px;font-size:13px;color:var(--blue-d);font-weight:600;text-decoration:none;">🔗 Consultar no portal da Fazenda</a>`:''}</div>`:''}
+    ${d.chave?`<div class="psec"><div class="psec-title">Chave de Acesso</div>
+      <div class="chave" id="chave-${d.id}">${d.chave}</div>
+      <div style="display:flex;gap:8px;margin-top:8px;">
+        <button class="btn sm" onclick="navigator.clipboard.writeText('${d.chave}').then(()=>toast('Chave copiada!','ok'))">📋 Copiar chave</button>
+        ${consultaURL(d)?`<a href="${consultaURL(d)}" target="_blank" class="btn sm" style="text-decoration:none;">🔗 Abrir portal da Fazenda</a>`:''}
+      </div>
+    </div>`:''}
     ${d.textoExtraido?`<div class="psec"><div class="psec-title">Texto extraído do PDF</div>
       <div class="chave" style="max-height:120px;overflow-y:auto">${d.textoExtraido}</div></div>`:''}
   `;
