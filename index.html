@@ -46,7 +46,12 @@
 html,body{height:100%;font-family:var(--sans);background:var(--bg);color:var(--text);font-size:14px;line-height:1.5;}
 
 /* ── Shell ── */
-.shell{display:grid;grid-template-columns:215px 1fr;height:100vh;overflow:hidden;}
+.shell{display:grid;grid-template-columns:215px 1fr;grid-template-rows:auto 1fr;height:100vh;overflow:hidden;}
+.topbar{grid-column:1/-1;background:var(--blue);padding:10px 28px;display:flex;align-items:center;justify-content:space-between;}
+.topbar-brand{font-family:var(--head);font-size:15px;font-weight:700;color:#fff;letter-spacing:.02em;}
+.topbar-sub{font-size:11px;color:rgba(255,255,255,.7);margin-top:1px;}
+.topbar-right{font-size:11px;color:rgba(255,255,255,.6);}
+.sidebar{grid-row:2;}
 
 /* ── Sidebar ── */
 .sidebar{
@@ -268,6 +273,14 @@ tbody tr:hover td{background:var(--blue-ll);}
 </head>
 <body>
 <div class="shell">
+  <!-- Topbar -->
+  <header class="topbar">
+    <div>
+      <div class="topbar-brand">Grupo Onze Copos</div>
+      <div class="topbar-sub">Sistema de Gestão Fiscal</div>
+    </div>
+    <div class="topbar-right">Leitor Fiscal · NF-e · NFC-e · Cupons PDF</div>
+  </header>
   <!-- Sidebar -->
   <aside class="sidebar">
     <div class="logo">
