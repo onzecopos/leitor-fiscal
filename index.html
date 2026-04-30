@@ -776,12 +776,36 @@ async function parsePDF(file) {
 
         const acumTemConteudo = acum.cod !== '' || acum.desc !== '';
 
-        if (!acumTemConteudo && proxTemCod && proxComValor.desc !== '' && ultimoItem) {
-          // Próximo item tem código E descrição própria → esta linha é pós-item
-          if (r.desc) ultimoItem.descricao = (ultimoItem.descricao + ' ' + r.desc).trim();
-          lastClosedY = r.y;
+        // Lookahead: encontra o próximo item com valor
+        // Se ele tem descrição própria E o acumulador está vazio → esta linha é pós-item
+        // Se ele NÃO tem descrição → esta linha é pré-item (o item precisa dela)
+        // Caso especial: se há MÚLTIPLAS linhas sem valor consecutivas antes do próximo valor,
+        // apenas a ÚLTIMA é pré-item; as anteriores são pós-item do item fechado
+        if (!acumTemConteudo && ultimoItem) {
+          // Conta quantas linhas sem valor existem até o próximo com valor
+          let semValorAFrente = 0;
+          for (let j = i + 1; j < rows.length; j++) {
+            if (rows[j].tot > 0) break;
+            semValorAFrente++;
+          }
+
+          if (proxComValor && !proxTemCod) {
+            // Próximo item não tem código → esta linha é pré-item
+            acum.cod  += r.cod;
+            if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
+          } else if (proxComValor && proxTemCod && proxComValor.desc === '') {
+            // Próximo item tem código mas sem desc → esta linha é pré-item
+            acum.cod  += r.cod;
+            if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
+          } else if (semValorAFrente > 1) {
+            // Múltiplas linhas sem valor: esta é pós-item (as próximas são pré-item)
+            if (r.desc) ultimoItem.descricao = (ultimoItem.descricao + ' ' + r.desc).trim();
+          } else {
+            // Só uma linha sem valor e próximo tem desc própria → pós-item
+            if (r.desc) ultimoItem.descricao = (ultimoItem.descricao + ' ' + r.desc).trim();
+          }
         } else {
-          // Pré-item — acumula para o próximo
+          // Acumulador já tem conteúdo — sempre pré-item
           acum.cod  += r.cod;
           if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
           if (!acum.qtd && r.qtd) acum.qtd = r.qtd;
