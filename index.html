@@ -776,8 +776,8 @@ async function parsePDF(file) {
 
         const acumTemConteudo = acum.cod !== '' || acum.desc !== '';
 
-        if (!acumTemConteudo && proxTemCod && ultimoItem) {
-          // Acumulador vazio + próximo item tem código próprio = pós-item
+        if (!acumTemConteudo && proxTemCod && proxComValor.desc !== '' && ultimoItem) {
+          // Próximo item tem código E descrição própria → esta linha é pós-item
           if (r.desc) ultimoItem.descricao = (ultimoItem.descricao + ' ' + r.desc).trim();
           lastClosedY = r.y;
         } else {
