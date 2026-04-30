@@ -731,10 +731,11 @@ async function parsePDF(file) {
     // (independente de ter código ou não).
     // Todas as linhas SEM valor são acumuladas até encontrar uma linha COM valor.
 
-    let acum = { cod:'', desc:'', qtd:0, unit:0, tot:0, lastY:0 };
-    let ultimoItem = null; // referência ao último item adicionado
+    let acum = { cod:'', desc:'', qtd:0, unit:0, tot:0 };
+    let lastClosedY = 0;
+    let ultimoItem = null;
 
-    const flush = () => {
+    const flush = (closedY) => {
       if (acum.tot > 0 && acum.qtd > 0) {
         const novoItem = {
           codigo: acum.cod, descricao: acum.desc.trim(),
@@ -744,38 +745,35 @@ async function parsePDF(file) {
         };
         itens.push(novoItem);
         ultimoItem = novoItem;
+        lastClosedY = closedY;
       }
-      acum = { cod:'', desc:'', qtd:0, unit:0, tot:0, lastY:0 };
+      acum = { cod:'', desc:'', qtd:0, unit:0, tot:0 };
     };
 
     for (const r of rows) {
       if (r.tot > 0) {
-        // Linha com valor — fecha o item acumulado
         acum.cod  += r.cod;
         if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
         if (!acum.qtd) acum.qtd = r.qtd;
         if (!acum.unit) acum.unit = r.unit;
         acum.tot = r.tot;
-        acum.lastY = r.y;
-        flush();
+        flush(r.y);
       } else {
-        // Linha sem valor
-        // Se estamos logo após um item fechado (dy pequeno ≤ 8px) e o acum está vazio,
-        // essa linha é continuação da descrição do item anterior
-        const dyUltimo = ultimoItem && acum.cod==='' && acum.desc==='' 
-          ? r.y - acum.lastY 
-          : 999;
-        
-        if (dyUltimo <= 8 && ultimoItem) {
-          // Continuação do item já fechado — adiciona à descrição do item anterior
+        // Linha sem valor: pertence ao item fechado anterior ou ao próximo?
+        // Se dy em relação ao último item fechado é pequeno (≤8px), é continuação dele
+        const dyFechado = ultimoItem ? r.y - lastClosedY : 999;
+        const acumVazio = acum.cod==='' && acum.desc==='' && acum.qtd===0;
+
+        if (acumVazio && dyFechado <= 8 && ultimoItem) {
+          // Continuação do item já fechado
           if (r.desc) ultimoItem.descricao = (ultimoItem.descricao + ' ' + r.desc).trim();
+          lastClosedY = r.y; // atualiza para encadear múltiplas linhas
         } else {
-          // Acumula para o próximo item
+          // Pertence ao próximo item
           acum.cod  += r.cod;
           if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
           if (!acum.qtd && r.qtd) acum.qtd = r.qtd;
           if (!acum.unit && r.unit) acum.unit = r.unit;
-          acum.lastY = r.y;
         }
       }
     }
