@@ -666,95 +666,87 @@ async function parsePDF(file) {
   const idxF = linhas.findIndex(l=>/Qtde\.?\s*total\s*de\s*itens/i.test(l.texto));
   const itens = [];
 
-  // DEBUG — mostra tokens ao redor do cabeçalho detectado
-  const logEl = document.getElementById('log');
-  if (logEl) {
-    logEl.style.display='block';
-    logEl.innerHTML += `<div style="color:#aaa">> [DEBUG] idxH=${idxH} idxF=${idxF} totalLinhas=${linhas.length}</div>`;
-    linhas.slice(Math.max(0,idxH>=0?idxH:0), Math.min((idxH>=0?idxH:0)+8, linhas.length)).forEach(l=>{
-      logEl.innerHTML += `<div style="color:#aaa;font-size:10px">Y${l.y}: ${l.tokens.map(t=>`[x${t.x}:"${t.str}"]`).join(' ')}</div>`;
-    });
-  }
-
   if (idxH >= 0) {
     const fim = idxF>=0 ? idxF : linhas.length;
     const secao = linhas.slice(idxH+1, fim);
 
-    // Determina xQtd e xValor a partir dos tokens R$ encontrados na seção
-    const xsRS = [];
-    secao.forEach(l => l.tokens.forEach(t => { if(t.str==='R$') xsRS.push(t.x); }));
-    xsRS.sort((a,b)=>a-b);
-    // Dois grupos de R$: Valor Unit. e Valor Total
-    let xUnit=0, xTotal=0;
-    if (xsRS.length>=2) {
-      // agrupa por proximidade
-      const grupos = [];
-      let g=[xsRS[0]];
-      for(let i=1;i<xsRS.length;i++){
-        if(xsRS[i]-xsRS[i-1]<15) g.push(xsRS[i]);
-        else { grupos.push(g); g=[xsRS[i]]; }
-      }
-      grupos.push(g);
-      if(grupos.length>=2){
-        xUnit  = Math.round(grupos[grupos.length-2].reduce((s,v)=>s+v,0)/grupos[grupos.length-2].length);
-        xTotal = Math.round(grupos[grupos.length-1].reduce((s,v)=>s+v,0)/grupos[grupos.length-1].length);
-      } else if(grupos.length===1){
-        xTotal = Math.round(grupos[0].reduce((s,v)=>s+v,0)/grupos[0].length);
-        xUnit  = xTotal-50;
-      }
+    // Detecta posições X das colunas dinamicamente pelo cabeçalho
+    let xCod=0, xDesc=0, xQtd=0, xUnit=0, xTotal=0;
+    const hTokens = linhas[idxH].tokens;
+    // Une tokens próximos para reconstruir "Valor Unit." e "Valor Total"
+    for (let i=0; i<hTokens.length; i++) {
+      const s = hTokens[i].str;
+      const x = hTokens[i].x;
+      const prox = hTokens[i+1]?.str||'';
+      if (/^c[oó]d/i.test(s))                          xCod   = x;
+      else if (/^desc/i.test(s))                        xDesc  = x;
+      else if (/^qtd/i.test(s))                         xQtd   = x;
+      else if (/^valor$/i.test(s) && /unit/i.test(prox)) xUnit  = x;
+      else if (/^valor$/i.test(s) && /total/i.test(prox)) xTotal = x;
+      else if (/^valor\s*unit/i.test(s))                xUnit  = x;
+      else if (/^valor\s*tot/i.test(s))                 xTotal = x;
+      else if (/^unit/i.test(s) && xUnit===0)           xUnit  = x;
+      else if (/^total/i.test(s) && xTotal===0)         xTotal = x;
     }
-    // xQtd: posição da coluna Qtd no header
-    let xQtd = 0;
-    linhas[idxH].tokens.forEach(t=>{ if(/qtd/i.test(t.str)) xQtd=t.x; });
-    if(!xQtd && xUnit>0) xQtd = xUnit-40;
+    // Fallback pelos valores encontrados no debug caso algum não detecte
+    if (!xCod)   xCod   = hTokens[0]?.x || 12;
+    if (!xDesc)  xDesc  = hTokens[1]?.x || 41;
+    if (!xQtd)   xQtd   = hTokens[2]?.x || 117;
+    if (!xUnit)  xUnit  = hTokens[hTokens.length-2]?.x || 146;
+    if (!xTotal) xTotal = hTokens[hTokens.length-1]?.x || 194;
+
+    // Tolerância de 12px para cada coluna
+    const TOL = 12;
+    const emCod   = x => x >= xCod-TOL   && x < xDesc-TOL;
+    const emDesc  = x => x >= xDesc-TOL  && x < xQtd-TOL;
+    const emQtd   = x => x >= xQtd-TOL   && x < xUnit-TOL;
+    const emUnit  = x => x >= xUnit-TOL  && x < xTotal-TOL;
+    const emTotal = x => x >= xTotal-TOL;
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
     let item = null;
     for (const linha of secao) {
-      if (!linha.texto||isLixo(linha.texto)) continue;
+      if (!linha.texto || isLixo(linha.texto)) continue;
 
-      // Separa tokens por zona: esquerda=codigo+desc, meio=qtd, direita=valores
-      const zEsq=[], zQtd=[], zUnit=[], zTotal=[];
-      linha.tokens.forEach(t=>{
-        if(isLixo(t.str)) return;
-        if (xQtd>0 && t.x >= xQtd-10 && t.x < (xUnit||xQtd+50)-10) zQtd.push(t.str);
-        else if (xUnit>0 && t.x >= xUnit-10 && t.x < xTotal-10)      zUnit.push(t.str);
-        else if (xTotal>0 && t.x >= xTotal-10)                        zTotal.push(t.str);
-        else                                                           zEsq.push(t.str);
+      const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
+      linha.tokens.forEach(t => {
+        if (isLixo(t.str)) return;
+        if      (emCod(t.x))   cols.cod.push(t.str);
+        else if (emDesc(t.x))  cols.desc.push(t.str);
+        else if (emQtd(t.x))   cols.qtd.push(t.str);
+        else if (emUnit(t.x))  cols.unit.push(t.str);
+        else if (emTotal(t.x)) cols.total.push(t.str);
       });
 
-      const esqTxt   = zEsq.join(' ').trim();
-      const mCodigo  = esqTxt.match(/^(\d{3,})(\s+(.*))?$/);
-      const temValor = zTotal.filter(s=>s!=='R$').length>0;
-      const qtdVal   = zQtd.filter(s=>s!=='R$'&&!/^R/.test(s)).join('').trim();
+      const codigoStr = cols.cod.join('').trim();
+      const temCodigo = /^\d{3,}$/.test(codigoStr);
+      const unitVal   = cols.unit.filter(s=>s!=='R$'&&s!=='$').join('').replace(/\./g,'').replace(',','.');
+      const totalVal  = cols.total.filter(s=>s!=='R$'&&s!=='$').join('').replace(/\./g,'').replace(',','.');
+      const qtdVal    = cols.qtd.filter(s=>!/R/.test(s)).join('').trim();
 
-      if (mCodigo) {
-        if (item&&item.valorTotal>0) itens.push(item);
-        const vU = zUnit.filter(s=>s!=='R$').join('').replace(/\./g,'').replace(',','.');
-        const vT = zTotal.filter(s=>s!=='R$').join('').replace(/\./g,'').replace(',','.');
+      if (temCodigo) {
+        if (item && item.valorTotal > 0) itens.push(item);
         item = {
-          codigo: mCodigo[1],
-          descricao: (mCodigo[3]||'').trim(),
-          ncm:'',cfop:'',unidade:'UN',
-          quantidade:  qtdVal ? parseFloat(qtdVal) : 0,
-          valorUnitario: vU ? parseFloat(vU) : 0,
-          valorTotal:    vT ? parseFloat(vT) : 0,
-          desconto:0,
+          codigo: codigoStr,
+          descricao: cols.desc.join(' ').trim(),
+          ncm:'', cfop:'', unidade:'UN',
+          quantidade:    qtdVal   ? parseFloat(qtdVal)   : 0,
+          valorUnitario: unitVal  ? parseFloat(unitVal)  : 0,
+          valorTotal:    totalVal ? parseFloat(totalVal) : 0,
+          desconto: 0,
         };
-        if(item.quantidade>0&&item.valorTotal>0){itens.push(item);item=null;}
+        if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
       } else if (item) {
-        // continuação: texto vai para descrição, valores fecham o item
-        if(esqTxt&&!isLixo(esqTxt)) item.descricao += ' '+esqTxt;
-        if(qtdVal&&!item.quantidade) item.quantidade=parseFloat(qtdVal);
-        if(zUnit.filter(s=>s!=='R$').length&&!item.valorUnitario)
-          item.valorUnitario=parseFloat(zUnit.filter(s=>s!=='R$').join('').replace(/\./g,'').replace(',','.'));
-        if(temValor&&!item.valorTotal)
-          item.valorTotal=parseFloat(zTotal.filter(s=>s!=='R$').join('').replace(/\./g,'').replace(',','.'));
-        if(item.quantidade>0&&item.valorTotal>0){itens.push(item);item=null;}
+        // continuação: acumula descrição e fecha com valores quando chegarem
+        if (cols.desc.length) item.descricao += ' ' + cols.desc.join(' ');
+        if (qtdVal && !item.quantidade) item.quantidade = parseFloat(qtdVal);
+        if (unitVal && !item.valorUnitario) item.valorUnitario = parseFloat(unitVal);
+        if (totalVal && !item.valorTotal)   item.valorTotal    = parseFloat(totalVal);
+        if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
       }
     }
-    if(item&&item.valorTotal>0) itens.push(item);
+    if (item && item.valorTotal > 0) itens.push(item);
   }
 
   return {
