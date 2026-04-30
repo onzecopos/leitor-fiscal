@@ -665,28 +665,15 @@ async function parsePDF(file) {
   );
   const idxF = linhas.findIndex(l=>/Qtde\.?\s*total\s*de\s*itens/i.test(l.texto));
   const itens = [];
-  const logEl = document.getElementById('log');
-  if (logEl && idxH >= 0) {
-    const secDbg = linhas.slice(idxH, Math.min(idxH+12, idxF>=0?idxF:linhas.length));
-    secDbg.forEach(l => {
-      logEl.style.display='block';
-      logEl.innerHTML += `<div style="color:#aaa;font-size:10px">Y${l.y}: ${l.tokens.map(t=>`[x${t.x}:"${t.str}"]`).join(' ')}</div>`;
-    });
-  }
-
   if (idxH >= 0) {
     const fim = idxF>=0 ? idxF : linhas.length;
     const secao = linhas.slice(idxH+1, fim);
 
-    // Usa a posição X de cada token do cabeçalho pela ordem: Cod, Desc, Qtd, Unit, Total
-    // O debug confirmou que chegam sempre nessa ordem
     const hTokens = linhas[idxH].tokens;
-    // Filtra tokens únicos por posição (remove duplicatas próximas)
     const hUniq = [];
     hTokens.forEach(t => {
       if (!hUniq.length || t.x - hUniq[hUniq.length-1].x > 10) hUniq.push(t);
     });
-    // Garante pelo menos 5 colunas
     while (hUniq.length < 5) hUniq.push({ x: (hUniq[hUniq.length-1]?.x||0) + 40, str:'' });
 
     const xCod   = hUniq[0].x;
@@ -695,95 +682,95 @@ async function parsePDF(file) {
     const xUnit  = hUniq[3].x;
     const xTotal = hUniq[4].x;
 
-    // Classifica token na coluna pela faixa X
-    // Usa metade da distância entre colunas como fronteira
-    const midCodDesc  = Math.round((xCod  + xDesc)  / 2);
-    const midDescQtd  = Math.round((xDesc + xQtd)   / 2);
-    const midQtdUnit  = Math.round((xQtd  + xUnit)  / 2);
-    const midUnitTot  = Math.round((xUnit + xTotal)  / 2);
+    const midCodDesc = Math.round((xCod  + xDesc) / 2);
+    const midDescQtd = Math.round((xDesc + xQtd)  / 2);
+    const midQtdUnit = Math.round((xQtd  + xUnit) / 2);
+    const midUnitTot = Math.round((xUnit + xTotal) / 2);
 
     const colDe = x => {
-      if (x <= midCodDesc)  return 'cod';
-      if (x <= midDescQtd)  return 'desc';
-      if (x <= midQtdUnit)  return 'qtd';
-      if (x <= midUnitTot)  return 'unit';
+      if (x <= midCodDesc) return 'cod';
+      if (x <= midDescQtd) return 'desc';
+      if (x <= midQtdUnit) return 'qtd';
+      if (x <= midUnitTot) return 'unit';
       return 'total';
     };
 
-    // Extrai número de array de tokens — suporta "R$ 0,01" como token único ou separado
     const extraiVal = arr => {
       const s = arr.join(' ').replace(/R\$\s*/g,'').replace(/\./g,'').replace(',','.').trim();
-      const n = parseFloat(s);
-      return isNaN(n) ? 0 : n;
+      const n = parseFloat(s); return isNaN(n) ? 0 : n;
     };
     const extraiQtd = arr => {
       const s = arr.join('').replace(/R\$\s*/g,'').replace(',','.').trim();
-      const n = parseFloat(s);
-      return isNaN(n) ? 0 : n;
+      const n = parseFloat(s); return isNaN(n) ? 0 : n;
     };
-
-  if (logEl && idxH >= 0) {
-    const secDbg = linhas.slice(idxH, Math.min(idxH+12, idxF>=0?idxF:linhas.length));
-    secDbg.forEach(l => {
-      logEl.style.display='block';
-      logEl.innerHTML += `<div style="color:#aaa;font-size:10px">Y${l.y}: ${l.tokens.map(t=>`[x${t.x}:"${t.str}"]`).join(' ')}</div>`;
-    });
-  }
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
-    let item = null;
-    let descPendente = ''; // descrição que apareceu antes do código
+    // Primeira passagem: classifica cada linha em tipo
+    // tipo: 'item' (tem código), 'valores' (só valores), 'desc' (só descrição), 'misto' (código quebrado)
+    const linhasClassif = [];
     for (const linha of secao) {
       if (!linha.texto || isLixo(linha.texto)) continue;
-
       const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
-      linha.tokens.forEach(t => {
-        if (isLixo(t.str)) return;
-        cols[colDe(t.x)].push(t.str);
-      });
+      linha.tokens.forEach(t => { if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str); });
+      const cod = cols.cod.join('').trim();
+      const temCod = /^\d{2,}$/.test(cod);
+      const totalV = extraiVal(cols.total);
+      const unitV  = extraiVal(cols.unit);
+      const qtdV   = extraiQtd(cols.qtd);
+      const desc   = cols.desc.join(' ').trim();
+      linhasClassif.push({ cols, cod, temCod, totalV, unitV, qtdV, desc, temValor: totalV > 0 });
+    }
 
-      const codigoStr = cols.cod.join('').trim();
-      const temCodigo = /^\d{2,}$/.test(codigoStr);
-      const unitVal   = extraiVal(cols.unit);
-      const totalVal  = extraiVal(cols.total);
-      const qtdVal    = extraiQtd(cols.qtd);
-      const descStr   = cols.desc.join(' ').trim();
-      const temValor  = totalVal > 0;
+    // Segunda passagem: monta itens respeitando a ordem Y
+    // descPendente: descrição de linhas sem código que precede OU sucede o código
+    let item = null;
+    let descPendente = '';
 
-      if (temCodigo) {
+    for (let i = 0; i < linhasClassif.length; i++) {
+      const l = linhasClassif[i];
+
+      if (l.temCod) {
+        // Fecha item anterior
         if (item && item.valorTotal > 0) itens.push(item);
-        // usa descrição pendente se não há descrição na mesma linha
-        const descInicial = descStr || descPendente;
-        descPendente = '';
+        // descPendente pode ser prefixo da descrição deste item
+        const descInicial = l.desc ? l.desc : descPendente;
+        descPendente = l.desc ? descPendente : ''; // se usou pendente, limpa
+        if (l.desc) descPendente = ''; // tinha desc própria, descarta pendente
         item = {
-          codigo: codigoStr,
-          descricao: descInicial,
+          codigo: l.cod, descricao: descInicial,
           ncm:'', cfop:'', unidade:'UN',
-          quantidade:    qtdVal,
-          valorUnitario: unitVal,
-          valorTotal:    totalVal,
-          desconto: 0,
+          quantidade: l.qtdV, valorUnitario: l.unitV, valorTotal: l.totalV, desconto: 0,
         };
-        if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
-      } else if (temValor && !temCodigo && cols.cod.length === 0) {
-        // linha com só valores mas sem código — fecha item atual com esses valores
+        if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; descPendente = ''; }
+      } else if (l.temValor) {
+        // Só valores — fecha item atual
         if (item) {
-          if (qtdVal && !item.quantidade) item.quantidade = qtdVal;
-          if (unitVal && !item.valorUnitario) item.valorUnitario = unitVal;
-          item.valorTotal = totalVal;
-          if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
+          if (l.desc) item.descricao += ' ' + l.desc;
+          if (l.qtdV && !item.quantidade) item.quantidade = l.qtdV;
+          if (l.unitV && !item.valorUnitario) item.valorUnitario = l.unitV;
+          item.valorTotal = l.totalV;
+          if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; descPendente = ''; }
         }
-      } else if (item) {
-        // continuação: acumula descrição
-        if (descStr) item.descricao += ' ' + descStr;
-        if (qtdVal && !item.quantidade) item.quantidade = qtdVal;
-        if (unitVal && !item.valorUnitario) item.valorUnitario = unitVal;
-        if (temValor && !item.valorTotal)   item.valorTotal    = totalVal;
-        if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
-      } else if (!temCodigo && descStr && !temValor) {
-        // linha só com descrição antes de qualquer item — guarda como pendente
-        descPendente = (descPendente + ' ' + descStr).trim();
+      } else if (l.desc && !l.temCod && !l.temValor) {
+        // Só descrição
+        if (item) {
+          // Verifica se próxima linha tem código — se sim, essa desc é do próximo item
+          const prox = linhasClassif[i+1];
+          if (prox && prox.temCod) {
+            // É prefixo do próximo — fecha item atual e guarda como pendente
+            if (item.valorTotal > 0) itens.push(item);
+            item = null;
+            descPendente = l.desc;
+          } else {
+            // Continuação do item atual
+            item.descricao += ' ' + l.desc;
+            if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
+          }
+        } else {
+          // Acumula como pendente
+          descPendente = (descPendente + ' ' + l.desc).trim();
+        }
       }
     }
     if (item && item.valorTotal > 0) itens.push(item);
