@@ -582,21 +582,22 @@ async function parsePDF(file) {
   const texto = linhas.join('\n');
   const rFirst = (pat) => { for(const l of linhas){const m=l.match(pat);if(m)return m;} return null; };
 
-  // CNPJ — procura em todo o texto, priorizando linha com "CNPJ:"
+  // Extrai chave de acesso primeiro (44 dígitos) para evitar confusão com CNPJ
+  let chave='';
+  const mChave = texto.match(/\b(\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4})\b/) ||
+                 texto.match(/\b(\d{44})\b/);
+  if (mChave) chave = mChave[1].replace(/\s/g,'');
+
+  // CNPJ — formato obrigatório XX.XXX.XXX/XXXX-XX (com pontuação)
+  // Ignora sequências que fazem parte da chave de acesso
   let cnpj = '';
-  const cnpjPat = /(\d{2}[\.\-]?\d{3}[\.\-]?\d{3}[\s\/]?\d{4}[\.\-]?\d{2})/;
-  // primeiro tenta linha explícita com "CNPJ:"
+  const cnpjFormatado = /\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})\b/;
   for (const l of linhas) {
-    if (/CNPJ/i.test(l)) {
-      const m = l.match(cnpjPat);
-      if (m) { cnpj = m[1]; break; }
-    }
-  }
-  // fallback: primeira ocorrência no texto
-  if (!cnpj) {
-    for (const l of linhas) {
-      const m = l.match(cnpjPat);
-      if (m) { cnpj = m[1]; break; }
+    const m = l.match(cnpjFormatado);
+    if (m) {
+      // confirma que não é parte da chave
+      const digits = m[1].replace(/\D/g,'');
+      if (!chave.includes(digits)) { cnpj = m[1]; break; }
     }
   }
 
@@ -651,12 +652,6 @@ async function parsePDF(file) {
             || rFirst(/N[uú]mero\s*[:\-]?\s*(\d+).*S[eé]rie\s*[:\-]?\s*(\d+)/i)
             || rFirst(/(\d{3,})\s+S[eé]rie\s*(\d+)/i);
   if (mNum) { numero=mNum[1]; serie=mNum[2]; }
-
-  // Chave de acesso — sequência de 44 dígitos
-  let chave='';
-  const mChave = texto.match(/\b(\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4})\b/) ||
-                 texto.match(/\b(\d{44})\b/);
-  if (mChave) chave = mChave[1].replace(/\s/g,'');
 
   // Itens — linhas com padrão: código descrição qtd R$ valor_unit R$ valor_total
   const itens = [];
