@@ -688,12 +688,18 @@ async function parsePDF(file) {
     const xUnit  = hUniq[3].x;
     const xTotal = hUniq[4].x;
 
-    if (logEl) logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> hUniq=${hUniq.length} xCod=${xCod} xDesc=${xDesc} xQtd=${xQtd} xUnit=${xUnit} xTotal=${xTotal}</div>`;
+    // Classifica token na coluna pela faixa X
+    // Usa metade da distância entre colunas como fronteira
+    const midCodDesc  = Math.round((xCod  + xDesc)  / 2);
+    const midDescQtd  = Math.round((xDesc + xQtd)   / 2);
+    const midQtdUnit  = Math.round((xQtd  + xUnit)  / 2);
+    const midUnitTot  = Math.round((xUnit + xTotal)  / 2);
+
     const colDe = x => {
-      if (x < xDesc - 5)  return 'cod';
-      if (x < xQtd  - 5)  return 'desc';
-      if (x < xUnit  - 5)  return 'qtd';
-      if (x < xTotal - 5)  return 'unit';
+      if (x <= midCodDesc)  return 'cod';
+      if (x <= midDescQtd)  return 'desc';
+      if (x <= midQtdUnit)  return 'qtd';
+      if (x <= midUnitTot)  return 'unit';
       return 'total';
     };
 
