@@ -722,9 +722,18 @@ async function parsePDF(file) {
       return isNaN(n) ? 0 : n;
     };
 
+  if (logEl && idxH >= 0) {
+    const secDbg = linhas.slice(idxH, Math.min(idxH+12, idxF>=0?idxF:linhas.length));
+    secDbg.forEach(l => {
+      logEl.style.display='block';
+      logEl.innerHTML += `<div style="color:#aaa;font-size:10px">Y${l.y}: ${l.tokens.map(t=>`[x${t.x}:"${t.str}"]`).join(' ')}</div>`;
+    });
+  }
+
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
     let item = null;
+    let descPendente = ''; // descrição que apareceu antes do código
     for (const linha of secao) {
       if (!linha.texto || isLixo(linha.texto)) continue;
 
@@ -735,17 +744,21 @@ async function parsePDF(file) {
       });
 
       const codigoStr = cols.cod.join('').trim();
-      // Código: só dígitos, mínimo 2, na coluna correta (posição X próxima de xCod)
       const temCodigo = /^\d{2,}$/.test(codigoStr);
       const unitVal   = extraiVal(cols.unit);
       const totalVal  = extraiVal(cols.total);
       const qtdVal    = extraiQtd(cols.qtd);
+      const descStr   = cols.desc.join(' ').trim();
+      const temValor  = totalVal > 0;
 
       if (temCodigo) {
         if (item && item.valorTotal > 0) itens.push(item);
+        // usa descrição pendente se não há descrição na mesma linha
+        const descInicial = descStr || descPendente;
+        descPendente = '';
         item = {
           codigo: codigoStr,
-          descricao: cols.desc.join(' ').trim(),
+          descricao: descInicial,
           ncm:'', cfop:'', unidade:'UN',
           quantidade:    qtdVal,
           valorUnitario: unitVal,
@@ -753,12 +766,24 @@ async function parsePDF(file) {
           desconto: 0,
         };
         if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
+      } else if (temValor && !temCodigo && cols.cod.length === 0) {
+        // linha com só valores mas sem código — fecha item atual com esses valores
+        if (item) {
+          if (qtdVal && !item.quantidade) item.quantidade = qtdVal;
+          if (unitVal && !item.valorUnitario) item.valorUnitario = unitVal;
+          item.valorTotal = totalVal;
+          if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
+        }
       } else if (item) {
-        if (cols.desc.length) item.descricao += ' ' + cols.desc.join(' ');
+        // continuação: acumula descrição
+        if (descStr) item.descricao += ' ' + descStr;
         if (qtdVal && !item.quantidade) item.quantidade = qtdVal;
         if (unitVal && !item.valorUnitario) item.valorUnitario = unitVal;
-        if (totalVal && !item.valorTotal)   item.valorTotal    = totalVal;
+        if (temValor && !item.valorTotal)   item.valorTotal    = totalVal;
         if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
+      } else if (!temCodigo && descStr && !temValor) {
+        // linha só com descrição antes de qualquer item — guarda como pendente
+        descPendente = (descPendente + ' ' + descStr).trim();
       }
     }
     if (item && item.valorTotal > 0) itens.push(item);
