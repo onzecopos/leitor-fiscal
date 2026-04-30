@@ -665,15 +665,7 @@ async function parsePDF(file) {
   );
   const idxF = linhas.findIndex(l=>/Qtde\.?\s*total\s*de\s*itens/i.test(l.texto));
   const itens = [];
-
-  // DEBUG MÍNIMO
   const logEl = document.getElementById('log');
-  if (logEl) {
-    logEl.style.display='block';
-    logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> idxH=${idxH} idxF=${idxF}</div>`;
-    if (idxH>=0) logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> header tokens: ${linhas[idxH].tokens.map(t=>`[x${t.x}:"${t.str}"]`).join(' ')}</div>`;
-    if (idxH>=0) logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> hUniq count seria: veja linha seguinte</div>`;
-  }
 
   if (idxH >= 0) {
     const fim = idxF>=0 ? idxF : linhas.length;
@@ -697,13 +689,24 @@ async function parsePDF(file) {
     const xTotal = hUniq[4].x;
 
     if (logEl) logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> hUniq=${hUniq.length} xCod=${xCod} xDesc=${xDesc} xQtd=${xQtd} xUnit=${xUnit} xTotal=${xTotal}</div>`;
-    if (logEl && secao[0]) logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> 1ª linha itens: ${secao[0].tokens.map(t=>`[x${t.x}:"${t.str}"]`).join(' ')}</div>`;
     const colDe = x => {
       if (x < xDesc - 5)  return 'cod';
       if (x < xQtd  - 5)  return 'desc';
       if (x < xUnit  - 5)  return 'qtd';
       if (x < xTotal - 5)  return 'unit';
       return 'total';
+    };
+
+    // Extrai número de array de tokens — suporta "R$ 0,01" como token único ou separado
+    const extraiVal = arr => {
+      const s = arr.join(' ').replace(/R\$\s*/g,'').replace(/\./g,'').replace(',','.').trim();
+      const n = parseFloat(s);
+      return isNaN(n) ? 0 : n;
+    };
+    const extraiQtd = arr => {
+      const s = arr.join('').replace(/R\$\s*/g,'').replace(',','.').trim();
+      const n = parseFloat(s);
+      return isNaN(n) ? 0 : n;
     };
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
@@ -720,9 +723,9 @@ async function parsePDF(file) {
 
       const codigoStr = cols.cod.join('').trim();
       const temCodigo = /^\d{3,}$/.test(codigoStr);
-      const unitVal   = cols.unit.filter(s=>s!=='R$'&&s!=='$').join('').replace(/\./g,'').replace(',','.');
-      const totalVal  = cols.total.filter(s=>s!=='R$'&&s!=='$').join('').replace(/\./g,'').replace(',','.');
-      const qtdVal    = cols.qtd.filter(s=>!/^R/.test(s)).join('').trim();
+      const unitVal   = extraiVal(cols.unit);
+      const totalVal  = extraiVal(cols.total);
+      const qtdVal    = extraiQtd(cols.qtd);
 
       if (temCodigo) {
         if (item && item.valorTotal > 0) itens.push(item);
@@ -730,17 +733,17 @@ async function parsePDF(file) {
           codigo: codigoStr,
           descricao: cols.desc.join(' ').trim(),
           ncm:'', cfop:'', unidade:'UN',
-          quantidade:    qtdVal   ? parseFloat(qtdVal)   : 0,
-          valorUnitario: unitVal  ? parseFloat(unitVal)  : 0,
-          valorTotal:    totalVal ? parseFloat(totalVal) : 0,
+          quantidade:    qtdVal,
+          valorUnitario: unitVal,
+          valorTotal:    totalVal,
           desconto: 0,
         };
         if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
       } else if (item) {
         if (cols.desc.length) item.descricao += ' ' + cols.desc.join(' ');
-        if (qtdVal && !item.quantidade) item.quantidade = parseFloat(qtdVal);
-        if (unitVal && !item.valorUnitario) item.valorUnitario = parseFloat(unitVal);
-        if (totalVal && !item.valorTotal)   item.valorTotal    = parseFloat(totalVal);
+        if (qtdVal && !item.quantidade) item.quantidade = qtdVal;
+        if (unitVal && !item.valorUnitario) item.valorUnitario = unitVal;
+        if (totalVal && !item.valorTotal)   item.valorTotal    = totalVal;
         if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
       }
     }
