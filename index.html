@@ -554,80 +554,85 @@ async function parsePDF(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({data:buf}).promise;
 
-  // Coleta itens de texto com posição para reconstruir linhas reais
-  let allItems = [];
-  for (let i=1;i<=pdf.numPages;i++) {
+  // Coleta todos os tokens com posição (x, y global acumulado por página)
+  const tokens = [];
+  let alturaAcum = 0;
+  for (let i=1; i<=pdf.numPages; i++) {
     const page = await pdf.getPage(i);
+    const vp   = page.getViewport({scale:1});
     const content = await page.getTextContent();
-    const vp = page.getViewport({scale:1});
     content.items.forEach(it => {
-      if (it.str.trim()) allItems.push({
+      if (!it.str.trim()) return;
+      tokens.push({
         str: it.str.trim(),
-        y: Math.round(vp.height - it.transform[5]), // inverte Y (topo = 0)
-        x: Math.round(it.transform[4])
+        x: Math.round(it.transform[4]),
+        y: Math.round(alturaAcum + (vp.height - it.transform[5])),
       });
     });
+    alturaAcum += vp.height;
   }
 
-  // Agrupa por linha (mesma posição Y ± 4px)
+  // Agrupa tokens em linhas por Y global (tolerância 4px)
   const linhaMap = {};
-  allItems.forEach(it => {
-    const key = Math.round(it.y / 4) * 4;
+  tokens.forEach(t => {
+    const key = Math.round(t.y / 4) * 4;
     linhaMap[key] = linhaMap[key] || [];
-    linhaMap[key].push(it);
+    linhaMap[key].push(t);
   });
-  const linhas = Object.keys(linhaMap).sort((a,b)=>a-b)
-    .map(k => linhaMap[k].sort((a,b)=>a.x-b.x).map(it=>it.str).join(' '));
+  const linhas = Object.keys(linhaMap)
+    .sort((a,b) => a-b)
+    .map(k => ({
+      y: Number(k),
+      tokens: linhaMap[k].sort((a,b) => a.x-b.x),
+      texto: linhaMap[k].sort((a,b) => a.x-b.x).map(t=>t.str).join(' ').trim()
+    }))
+    .filter(l => l.texto);
 
-  const texto = linhas.join('\n');
-  const rFirst = (pat) => { for(const l of linhas){const m=l.match(pat);if(m)return m;} return null; };
+  const textoLinhas = linhas.map(l=>l.texto);
+  const texto = textoLinhas.join('\n');
+  const rFirst = (pat) => { for(const l of textoLinhas){const m=l.match(pat);if(m)return m;} return null; };
 
-  // Extrai chave de acesso primeiro (44 dígitos) para evitar confusão com CNPJ
-  let chave='';
-  const mChave = texto.match(/\b(\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4})\b/) ||
-                 texto.match(/\b(\d{44})\b/);
+  // Chave de acesso
+  let chave = '';
+  const mChave = texto.match(/(\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4})/)
+              || texto.match(/\b(\d{44})\b/);
   if (mChave) chave = mChave[1].replace(/\s/g,'');
 
-  // CNPJ — formato XX.XXX.XXX/XXXX-XX (aceita espaço após o traço por quebra de linha no PDF)
+  // CNPJ
   let cnpj = '';
-  const cnpjFormatado = /\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\s*\d{2})\b/;
-  for (const l of linhas) {
-    const m = l.match(cnpjFormatado);
+  for (const l of textoLinhas) {
+    const m = l.match(/\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\s*\d{2})\b/);
     if (m) {
       const digits = m[1].replace(/\D/g,'');
       if (!chave.includes(digits)) { cnpj = m[1].replace(/\s/g,''); break; }
     }
   }
-  // fallback: busca no texto corrido (concatena linhas adjacentes para pegar CNPJs quebrados)
   if (!cnpj) {
-    const textoJunto = texto.replace(/\n/g,' ');
-    const m = textoJunto.match(/\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\s*\d{2})\b/);
+    const tj = texto.replace(/\n/g,' ');
+    const m = tj.match(/\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\s*\d{2})\b/);
     if (m) cnpj = m[1].replace(/\s/g,'');
   }
 
-  // UF — extrai sigla do estado do endereço (ex: "Rio de Janeiro - RJ - CEP" ou "- RJ -")
-  let uf = '';
+  // UF
   const ufs = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
-  for (const l of linhas) {
-    const m = l.match(/\b([A-Z]{2})\b\s*[-–]?\s*CEP/);
+  let uf = '';
+  for (const l of textoLinhas) {
+    const m = l.match(/\b([A-Z]{2})\b\s*[-\u2013]?\s*CEP/);
     if (m && ufs.includes(m[1])) { uf = m[1]; break; }
-    const m2 = l.match(/[-–]\s*([A-Z]{2})\s*[-–]/);
+    const m2 = l.match(/[-\u2013]\s*([A-Z]{2})\s*[-\u2013]/);
     if (m2 && ufs.includes(m2[1])) { uf = m2[1]; break; }
   }
 
-  // ou em linha separada antes dele
+  // Nome emissor
   let nome = '';
-  for (const l of linhas) {
+  for (const l of textoLinhas) {
     const t = l.trim();
     if (!t || t.length < 4) continue;
     if (/^\d[\d\s\.\-\/]+$/.test(t)) continue;
     if (/https?:\/\//i.test(t)) continue;
     if (/^(documento|nfc|nf-e|danfe|consulte|protocolo|data\s+de)/i.test(t)) continue;
     if ((t.match(/[a-zA-ZÀ-ú]/g)||[]).length > 4) {
-      // remove a parte do CNPJ se estiver na mesma linha
-      nome = t.replace(/[\-–]?\s*CNPJ\s*[:\-]?\s*[\d\.\-\/]+/i, '').trim();
-      // remove traços soltos no final
-      nome = nome.replace(/[\s\-–]+$/, '').trim();
+      nome = t.replace(/[\-\u2013]?\s*CNPJ\s*[:\-]?\s*[\d\.\-\/\s]+/i, '').trim().replace(/[\s\-\u2013]+$/, '');
       break;
     }
   }
@@ -644,9 +649,8 @@ async function parsePDF(file) {
   const dataEmissao = datas[0] || new Date().toISOString().slice(0,10);
   const dataSaida   = datas[1] || dataEmissao;
 
-  // Valor total — busca "Valor a pagar", "Valor total" ou "Total"
-  let valorNota = 0;
-  let desconto  = 0;
+  // Valor total
+  let valorNota = 0, desconto = 0;
   for (const pat of [
     /valor\s*a\s*pagar\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i,
     /valor\s*total\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i,
@@ -655,98 +659,87 @@ async function parsePDF(file) {
     const m = rFirst(pat);
     if (m) { valorNota = parseFloat(m[1].replace(/\./g,'').replace(',','.')); break; }
   }
-  // Desconto
   const mDesc = rFirst(/desconto\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i);
   if (mDesc) desconto = parseFloat(mDesc[1].replace(/\./g,'').replace(',','.'));
 
-  // Número e série — ex: "Nº 41779 Série 2 Via Consumidor"
+  // Número e série
   let numero='', serie='';
   const mNum = rFirst(/N[º°ª\u00ba\u00aa]?\s*(\d+)\s+S[eé]rie\s*(\d+)/i)
-            || rFirst(/N[uú]mero\s*[:\-]?\s*(\d+).*S[eé]rie\s*[:\-]?\s*(\d+)/i)
-            || rFirst(/(\d{3,})\s+S[eé]rie\s*(\d+)/i);
+            || rFirst(/N[uú]mero\s*[:\-]?\s*(\d+).*S[eé]rie\s*[:\-]?\s*(\d+)/i);
   if (mNum) { numero=mNum[1]; serie=mNum[2]; }
 
-  // Itens — estratégia: trabalha com o texto posicional (allItems) para reconstruir
-  // linhas de produto que podem ter descrição quebrada em múltiplas linhas
-  // Lógica: encontra blocos entre "Código Descrição..." e "Qtde. total de itens"
+  // Itens por colunas X
+  const idxHeader = linhas.findIndex(l => /Código/i.test(l.texto) && /Descrição/i.test(l.texto));
+  const idxFim    = linhas.findIndex(l => /Qtde\.?\s*total\s*de\s*itens/i.test(l.texto));
   const itens = [];
-  const textoLinhas = linhas.join('\n');
 
-  // Delimita a seção de itens
-  const inicioItens = textoLinhas.search(/Código\s+Descrição\s+Qtd/i);
-  const fimItens    = textoLinhas.search(/Qtde\.?\s*total\s*de\s*itens/i);
-  const secaoItens  = inicioItens >= 0 && fimItens > inicioItens
-    ? textoLinhas.slice(inicioItens, fimItens)
-    : textoLinhas;
+  if (idxHeader >= 0) {
+    // Detecta faixas X de cada coluna pelo cabeçalho
+    const headerTokens = linhas[idxHeader].tokens;
+    const colX = {};
+    headerTokens.forEach(t => {
+      if (/c[oó]d/i.test(t.str))  colX.codigo = t.x;
+      if (/desc/i.test(t.str))    colX.desc   = t.x;
+      if (/qtd/i.test(t.str))     colX.qtd    = t.x;
+      if (/unit/i.test(t.str))    colX.unit   = t.x;
+      if (/total/i.test(t.str))   colX.total  = t.x;
+    });
+    if (!colX.codigo) colX.codigo = 0;
+    if (!colX.desc)   colX.desc   = colX.codigo + 30;
+    if (!colX.qtd)    colX.qtd    = colX.desc   + 120;
+    if (!colX.unit)   colX.unit   = colX.qtd    + 30;
+    if (!colX.total)  colX.total  = colX.unit   + 50;
 
-  const linhasItens = secaoItens.split('\n').slice(1); // remove header
+    const isLixo = (t) => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(t);
+    const fim = idxFim >= 0 ? idxFim : linhas.length;
+    const linhasItem = linhas.slice(idxHeader + 1, fim);
 
-  // Padrão de linha de item: começa com código numérico + tem R$ no final
-  // Agrupa linhas de continuação (descrição quebrada) com o item anterior
-  const blocos = [];
-  for (const l of linhasItens) {
-    const l2 = l.trim();
-    if (!l2) continue;
-    // linha principal: código (4+ dígitos) + conteúdo com R$
-    const mPrincipal = l2.match(/^(\d{4,})\s+(.+?)\s+(\d+)\s+R\$\s*([\d\.]+,\d{2})\s+R\$\s*([\d\.]+,\d{2})$/i);
-    if (mPrincipal) {
-      blocos.push({ tipo:'completo', m: mPrincipal });
-      continue;
-    }
-    // linha com código no início mas descrição continua na próxima (sem R$)
-    const mCodigo = l2.match(/^(\d{4,})\s+(.+)$/);
-    if (mCodigo && !l2.includes('R$') && blocos.length === 0 || (mCodigo && !l2.includes('R$'))) {
-      blocos.push({ tipo:'inicio', codigo: mCodigo[1], desc: mCodigo[2] });
-      continue;
-    }
-    // linha de continuação com qtd + valores (fecha item anterior)
-    const mFim = l2.match(/^(.+?)\s+(\d+)\s+R\$\s*([\d\.]+,\d{2})\s+R\$\s*([\d\.]+,\d{2})$/i);
-    if (mFim && blocos.length > 0 && blocos[blocos.length-1].tipo === 'inicio') {
-      const prev = blocos[blocos.length-1];
-      prev.tipo = 'completo_manual';
-      prev.descExtra = mFim[1];
-      prev.qtd = mFim[2]; prev.vUnit = mFim[3]; prev.vTotal = mFim[4];
-      continue;
-    }
-    // linha só com qtd + valores (descrição estava na linha do código)
-    const mSoValores = l2.match(/^(\d+)\s+R\$\s*([\d\.]+,\d{2})\s+R\$\s*([\d\.]+,\d{2})$/i);
-    if (mSoValores && blocos.length > 0 && blocos[blocos.length-1].tipo === 'inicio') {
-      const prev = blocos[blocos.length-1];
-      prev.tipo = 'completo_manual';
-      prev.qtd = mSoValores[1]; prev.vUnit = mSoValores[2]; prev.vTotal = mSoValores[3];
-      continue;
-    }
-    // linha de continuação de descrição (sem código, sem R$, não é lixo)
-    if (blocos.length > 0 && blocos[blocos.length-1].tipo === 'inicio') {
-      // ignora lixo como "Nacional:", "leitorfiscal", URLs
-      if (!/nacional|estadual|municipal|importado|leitorfiscal|https?:/i.test(l2)) {
-        blocos[blocos.length-1].desc += ' ' + l2;
+    let item = null;
+    for (const linha of linhasItem) {
+      if (!linha.texto || isLixo(linha.texto)) continue;
+
+      // Classifica tokens por coluna
+      const cols = { codigo:[], desc:[], qtd:[], unit:[], total:[] };
+      linha.tokens.forEach(t => {
+        if (isLixo(t.str)) return;
+        if (t.x < colX.desc - 5)          cols.codigo.push(t.str);
+        else if (t.x < colX.qtd - 5)      cols.desc.push(t.str);
+        else if (t.x < colX.unit - 5)     cols.qtd.push(t.str);
+        else if (t.x < colX.total - 5)    cols.unit.push(t.str);
+        else                               cols.total.push(t.str);
+      });
+
+      const temCodigo = cols.codigo.length > 0 && /^\d{3,}$/.test(cols.codigo.join(''));
+      const temValor  = cols.total.length > 0;
+
+      if (temCodigo) {
+        if (item && item.valorTotal > 0) itens.push(item);
+        const vUnit = cols.unit.join('').replace(/[R$\s]/g,'').replace(/\./g,'').replace(',','.');
+        const vTot  = cols.total.join('').replace(/[R$\s]/g,'').replace(/\./g,'').replace(',','.');
+        const qtd   = cols.qtd.join('').replace(',','.');
+        item = {
+          codigo: cols.codigo.join(''),
+          descricao: cols.desc.join(' ').trim(),
+          ncm:'', cfop:'', unidade:'UN',
+          quantidade:   qtd   ? parseFloat(qtd)   : 0,
+          valorUnitario: vUnit ? parseFloat(vUnit) : 0,
+          valorTotal:   vTot  ? parseFloat(vTot)  : 0,
+          desconto: 0,
+        };
+        if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
+      } else if (item) {
+        // continuação do item anterior
+        if (cols.desc.length)  item.descricao += ' ' + cols.desc.join(' ');
+        if (cols.qtd.length && item.quantidade === 0)
+          item.quantidade = parseFloat(cols.qtd.join('').replace(',','.'));
+        if (cols.unit.length && item.valorUnitario === 0)
+          item.valorUnitario = parseFloat(cols.unit.join('').replace(/[R$\s]/g,'').replace(/\./g,'').replace(',','.'));
+        if (temValor && item.valorTotal === 0)
+          item.valorTotal = parseFloat(cols.total.join('').replace(/[R$\s]/g,'').replace(/\./g,'').replace(',','.'));
+        if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
       }
     }
-  }
-
-  // Converte blocos em itens
-  for (const b of blocos) {
-    if (b.tipo === 'completo') {
-      itens.push({
-        codigo: b.m[1], descricao: b.m[2].trim(),
-        ncm:'', cfop:'', unidade:'UN',
-        quantidade: parseFloat(b.m[3]),
-        valorUnitario: parseFloat(b.m[4].replace(/\./g,'').replace(',','.')),
-        valorTotal: parseFloat(b.m[5].replace(/\./g,'').replace(',','.')),
-        desconto: 0,
-      });
-    } else if (b.tipo === 'completo_manual' && b.qtd) {
-      const descFull = b.descExtra ? `${b.desc} ${b.descExtra}`.trim() : b.desc.trim();
-      itens.push({
-        codigo: b.codigo, descricao: descFull,
-        ncm:'', cfop:'', unidade:'UN',
-        quantidade: parseFloat(b.qtd),
-        valorUnitario: parseFloat(b.vUnit.replace(/\./g,'').replace(',','.')),
-        valorTotal: parseFloat(b.vTotal.replace(/\./g,'').replace(',','.')),
-        desconto: 0,
-      });
-    }
+    if (item && item.valorTotal > 0) itens.push(item);
   }
 
   return {
