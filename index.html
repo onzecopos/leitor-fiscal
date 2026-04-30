@@ -706,50 +706,75 @@ async function parsePDF(file) {
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
-    // DEBUG COMPLETO seção de itens
-    const logEl2 = document.getElementById('log');
-    if (logEl2) {
-      logEl2.style.display='block';
-      secao.forEach(l => {
-        logEl2.innerHTML += `<div style="color:#777;font-size:10px">Y${l.y}: ${l.tokens.map(t=>'[x'+t.x+':"'+t.str+'"]').join(' ')}</div>`;
-      });
-    }
+    // Estratégia baseada no padrão observado no debug:
+    // O pdf.js quebra itens longos em múltiplas linhas onde:
+    // - Linha principal: [xCod: cod_parte1] [xDesc: desc_parte1] [xQtd: qtd] [xUnit: val] [xTotal: val]
+    // - Linhas extras:   [xCod: cod_parte2?] [xDesc: desc_parte2?] (sem valores)
+    // Regra: acumula linhas consecutivas sem valores no item atual.
+    // Só abre novo item quando encontra um token em xCod que NÃO é continuação do código anterior.
 
-    // Primeira passagem: classifica cada linha em tipo
-    // tipo: 'item' (tem código), 'valores' (só valores), 'desc' (só descrição), 'misto' (código quebrado)
-    const linhasClassif = [];
+    // Pré-processa: une fragmentos de código (ex: "3138965" + "82" = "313896582")
+    // e fragmentos de descrição nas linhas sem valor
+    const blocos = []; // cada bloco = um item completo
+
+    let bAtual = null;
     for (const linha of secao) {
       if (!linha.texto || isLixo(linha.texto)) continue;
+
       const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
-      linha.tokens.forEach(t => { if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str); });
-      const cod = cols.cod.join('').trim();
-      const temCod = /^\d{2,}$/.test(cod);
-      const totalV = extraiVal(cols.total);
-      const unitV  = extraiVal(cols.unit);
-      const qtdV   = extraiQtd(cols.qtd);
-      const desc   = cols.desc.join(' ').trim();
-      linhasClassif.push({ cols, cod, temCod, totalV, unitV, qtdV, desc, temValor: totalV > 0 });
-    }
+      linha.tokens.forEach(t => {
+        if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str);
+      });
 
-    // Segunda passagem: monta itens
-    // Estratégia: para cada linha de só-descrição, olha adiante para saber
-    // se pertence ao item atual (próximo tem valores) ou ao próximo (próximo tem código)
-    const proxCodIdx = (i) => {
-      for (let j=i+1; j<linhasClassif.length; j++) {
-        if (linhasClassif[j].temCod) return j;
-        if (linhasClassif[j].temValor) return -1; // valores antes do código = pertence ao atual
+      const codTxt   = cols.cod.join('').trim();
+      const descTxt  = cols.desc.join(' ').trim();
+      const totalV   = extraiVal(cols.total);
+      const unitV    = extraiVal(cols.unit);
+      const qtdV     = extraiQtd(cols.qtd);
+      const temValor = totalV > 0 || unitV > 0;
+      const temCod   = /^\d+$/.test(codTxt) && codTxt.length > 0;
+      const temQtd   = qtdV > 0;
+
+      if (temValor && temQtd) {
+        // Linha com valores — pode ter código e/ou desc na mesma linha
+        if (bAtual && !bAtual.fechado) {
+          // Complementa bloco atual com valores
+          if (codTxt) bAtual.cod += codTxt;
+          if (descTxt) bAtual.desc += (bAtual.desc ? ' ' : '') + descTxt;
+          bAtual.qtd  = qtdV;
+          bAtual.unit = unitV;
+          bAtual.tot  = totalV;
+          bAtual.fechado = true;
+        } else {
+          // Novo bloco completo em uma linha
+          if (bAtual && bAtual.fechado) blocos.push(bAtual);
+          bAtual = { cod: codTxt, desc: descTxt, qtd: qtdV, unit: unitV, tot: totalV, fechado: true };
+        }
+      } else {
+        // Linha sem valores — pode ser início de item ou continuação
+        if (bAtual && !bAtual.fechado) {
+          // Continuação: acumula código e descrição
+          if (codTxt) bAtual.cod += codTxt;
+          if (descTxt) bAtual.desc += (bAtual.desc ? ' ' : '') + descTxt;
+        } else {
+          // Inicia novo bloco
+          if (bAtual && bAtual.fechado) blocos.push(bAtual);
+          bAtual = { cod: codTxt, desc: descTxt, qtd: 0, unit: 0, tot: 0, fechado: false };
+        }
       }
-      return -1;
-    };
+    }
+    if (bAtual && bAtual.fechado) blocos.push(bAtual);
 
-    let item = null;
-    let descPendente = '';
-
-    for (let i = 0; i < linhasClassif.length; i++) {
-      const l = linhasClassif[i];
-
-      if (l.temCod) {
-        if (item && item.valorTotal > 0) itens.push(item);
+    // Converte blocos em itens
+    for (const b of blocos) {
+      if (b.tot > 0 && b.qtd > 0) {
+        itens.push({
+          codigo: b.cod, descricao: b.desc.trim(),
+          ncm:'', cfop:'', unidade:'UN',
+          quantidade: b.qtd, valorUnitario: b.unit, valorTotal: b.tot, desconto: 0,
+        });
+      }
+    }
         const descInicial = l.desc || descPendente;
         descPendente = '';
         item = {
