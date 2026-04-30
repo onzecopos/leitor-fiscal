@@ -554,91 +554,84 @@ async function parsePDF(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({data:buf}).promise;
 
-  // Coleta todos os tokens com posição (x, y global acumulado por página)
+  // Coleta tokens com posição global (Y acumulado por página)
   const tokens = [];
   let alturaAcum = 0;
   for (let i=1; i<=pdf.numPages; i++) {
     const page = await pdf.getPage(i);
     const vp   = page.getViewport({scale:1});
-    const content = await page.getTextContent();
-    content.items.forEach(it => {
+    const ct   = await page.getTextContent();
+    ct.items.forEach(it => {
       if (!it.str.trim()) return;
       tokens.push({
         str: it.str.trim(),
-        x: Math.round(it.transform[4]),
-        y: Math.round(alturaAcum + (vp.height - it.transform[5])),
+        x:   Math.round(it.transform[4]),
+        y:   Math.round(alturaAcum + (vp.height - it.transform[5])),
       });
     });
     alturaAcum += vp.height;
   }
 
-  // Agrupa tokens em linhas por Y global (tolerância 4px)
-  const linhaMap = {};
+  // Agrupa em linhas por Y (tolerância 4px)
+  const lmap = {};
   tokens.forEach(t => {
-    const key = Math.round(t.y / 4) * 4;
-    linhaMap[key] = linhaMap[key] || [];
-    linhaMap[key].push(t);
+    const k = Math.round(t.y/4)*4;
+    lmap[k] = lmap[k] || [];
+    lmap[k].push(t);
   });
-  const linhas = Object.keys(linhaMap)
-    .sort((a,b) => a-b)
-    .map(k => ({
-      y: Number(k),
-      tokens: linhaMap[k].sort((a,b) => a.x-b.x),
-      texto: linhaMap[k].sort((a,b) => a.x-b.x).map(t=>t.str).join(' ').trim()
-    }))
-    .filter(l => l.texto);
+  const linhas = Object.keys(lmap).sort((a,b)=>a-b).map(k => ({
+    y: Number(k),
+    tokens: lmap[k].sort((a,b)=>a.x-b.x),
+    texto:  lmap[k].sort((a,b)=>a.x-b.x).map(t=>t.str).join(' ').trim(),
+  })).filter(l=>l.texto);
 
-  const textoLinhas = linhas.map(l=>l.texto);
-  const texto = textoLinhas.join('\n');
-  const rFirst = (pat) => { for(const l of textoLinhas){const m=l.match(pat);if(m)return m;} return null; };
+  const tl = linhas.map(l=>l.texto);
+  const texto = tl.join('\n');
+  const rFirst = pat => { for(const l of tl){const m=l.match(pat);if(m)return m;} return null; };
 
-  // Chave de acesso
+  // ── Chave ────────────────────────────────────────────────────────────────────
   let chave = '';
-  const mChave = texto.match(/(\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4})/)
-              || texto.match(/\b(\d{44})\b/);
-  if (mChave) chave = mChave[1].replace(/\s/g,'');
+  const mCh = texto.match(/(\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4})/)
+           || texto.match(/\b(\d{44})\b/);
+  if (mCh) chave = mCh[1].replace(/\s/g,'');
 
-  // CNPJ
+  // ── CNPJ ─────────────────────────────────────────────────────────────────────
   let cnpj = '';
-  for (const l of textoLinhas) {
+  for (const l of tl) {
     const m = l.match(/\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\s*\d{2})\b/);
-    if (m) {
-      const digits = m[1].replace(/\D/g,'');
-      if (!chave.includes(digits)) { cnpj = m[1].replace(/\s/g,''); break; }
-    }
+    if (m && !chave.includes(m[1].replace(/\D/g,''))) { cnpj = m[1].replace(/\s/g,''); break; }
   }
   if (!cnpj) {
-    const tj = texto.replace(/\n/g,' ');
-    const m = tj.match(/\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\s*\d{2})\b/);
+    const m = texto.replace(/\n/g,' ').match(/\b(\d{2}\.\d{3}\.\d{3}\/\d{4}-\s*\d{2})\b/);
     if (m) cnpj = m[1].replace(/\s/g,'');
   }
 
-  // UF
+  // ── UF ───────────────────────────────────────────────────────────────────────
   const ufs = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
   let uf = '';
-  for (const l of textoLinhas) {
+  for (const l of tl) {
     const m = l.match(/\b([A-Z]{2})\b\s*[-\u2013]?\s*CEP/);
-    if (m && ufs.includes(m[1])) { uf = m[1]; break; }
+    if (m && ufs.includes(m[1])) { uf=m[1]; break; }
     const m2 = l.match(/[-\u2013]\s*([A-Z]{2})\s*[-\u2013]/);
-    if (m2 && ufs.includes(m2[1])) { uf = m2[1]; break; }
+    if (m2 && ufs.includes(m2[1])) { uf=m2[1]; break; }
   }
 
-  // Nome emissor
+  // ── Nome emissor ─────────────────────────────────────────────────────────────
   let nome = '';
-  for (const l of textoLinhas) {
+  for (const l of tl) {
     const t = l.trim();
-    if (!t || t.length < 4) continue;
+    if (!t||t.length<4) continue;
     if (/^\d[\d\s\.\-\/]+$/.test(t)) continue;
     if (/https?:\/\//i.test(t)) continue;
     if (/^(documento|nfc|nf-e|danfe|consulte|protocolo|data\s+de)/i.test(t)) continue;
     if ((t.match(/[a-zA-ZÀ-ú]/g)||[]).length > 4) {
-      nome = t.replace(/[\-\u2013]?\s*CNPJ\s*[:\-]?\s*[\d\.\-\/\s]+/i, '').trim().replace(/[\s\-\u2013]+$/, '');
+      nome = t.replace(/[\-\u2013]?\s*CNPJ\s*[:\-]?\s*[\d\.\-\/\s]+/i,'').trim().replace(/[\s\-\u2013]+$/,'');
       break;
     }
   }
   if (!nome) nome = file.name.replace('.pdf','');
 
-  // Datas
+  // ── Datas ────────────────────────────────────────────────────────────────────
   const datas = [];
   for (const m of texto.matchAll(/\b(\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/g)) {
     try {
@@ -646,110 +639,121 @@ async function parsePDF(file) {
       datas.push(`${a.length===4?a:'20'+a}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`);
     } catch{}
   }
-  const dataEmissao = datas[0] || new Date().toISOString().slice(0,10);
-  const dataSaida   = datas[1] || dataEmissao;
+  const dataEmissao = datas[0]||new Date().toISOString().slice(0,10);
+  const dataSaida   = datas[1]||dataEmissao;
 
-  // Valor total
-  let valorNota = 0, desconto = 0;
+  // ── Valor total ───────────────────────────────────────────────────────────────
+  let valorNota=0, desconto=0;
   for (const pat of [
     /valor\s*a\s*pagar\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i,
     /valor\s*total\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i,
     /^total\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i,
-  ]) {
-    const m = rFirst(pat);
-    if (m) { valorNota = parseFloat(m[1].replace(/\./g,'').replace(',','.')); break; }
-  }
-  const mDesc = rFirst(/desconto\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i);
-  if (mDesc) desconto = parseFloat(mDesc[1].replace(/\./g,'').replace(',','.'));
+  ]) { const m=rFirst(pat); if(m){valorNota=parseFloat(m[1].replace(/\./g,'').replace(',','.'));break;} }
+  const mDsc=rFirst(/desconto\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i);
+  if(mDsc) desconto=parseFloat(mDsc[1].replace(/\./g,'').replace(',','.'));
 
-  // Número e série
-  let numero='', serie='';
-  const mNum = rFirst(/N[º°ª\u00ba\u00aa]?\s*(\d+)\s+S[eé]rie\s*(\d+)/i)
-            || rFirst(/N[uú]mero\s*[:\-]?\s*(\d+).*S[eé]rie\s*[:\-]?\s*(\d+)/i);
-  if (mNum) { numero=mNum[1]; serie=mNum[2]; }
+  // ── Número e série ────────────────────────────────────────────────────────────
+  let numero='',serie='';
+  const mNum=rFirst(/N[º°ª\u00ba\u00aa]?\s*(\d+)\s+S[eé]rie\s*(\d+)/i)
+          ||rFirst(/N[uú]mero\s*[:\-]?\s*(\d+).*S[eé]rie\s*[:\-]?\s*(\d+)/i);
+  if(mNum){numero=mNum[1];serie=mNum[2];}
 
-  // Itens por colunas X
-  const idxHeader = linhas.findIndex(l => /Código/i.test(l.texto) && /Descrição/i.test(l.texto));
-  const idxFim    = linhas.findIndex(l => /Qtde\.?\s*total\s*de\s*itens/i.test(l.texto));
+  // ── Itens ─────────────────────────────────────────────────────────────────────
+  // Estratégia: usa X para separar colunas numéricas (direita) do texto (esquerda)
+  // Detecta xMin (colunas de valor) como o X mínimo dos tokens "R$" na seção de itens
+  const idxH = linhas.findIndex(l=>/Código/i.test(l.texto)&&/Descrição/i.test(l.texto));
+  const idxF = linhas.findIndex(l=>/Qtde\.?\s*total\s*de\s*itens/i.test(l.texto));
   const itens = [];
 
-  if (idxHeader >= 0) {
-    // Detecta faixas X de cada coluna pelo cabeçalho
-    const headerTokens = linhas[idxHeader].tokens;
-    const colX = {};
-    headerTokens.forEach(t => {
-      if (/c[oó]d/i.test(t.str))  colX.codigo = t.x;
-      if (/desc/i.test(t.str))    colX.desc   = t.x;
-      if (/qtd/i.test(t.str))     colX.qtd    = t.x;
-      if (/unit/i.test(t.str))    colX.unit   = t.x;
-      if (/total/i.test(t.str))   colX.total  = t.x;
-    });
-    if (!colX.codigo) colX.codigo = 0;
-    if (!colX.desc)   colX.desc   = colX.codigo + 30;
-    if (!colX.qtd)    colX.qtd    = colX.desc   + 120;
-    if (!colX.unit)   colX.unit   = colX.qtd    + 30;
-    if (!colX.total)  colX.total  = colX.unit   + 50;
+  if (idxH >= 0) {
+    const fim = idxF>=0 ? idxF : linhas.length;
+    const secao = linhas.slice(idxH+1, fim);
 
-    const isLixo = (t) => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(t);
-    const fim = idxFim >= 0 ? idxFim : linhas.length;
-    const linhasItem = linhas.slice(idxHeader + 1, fim);
-
-    let item = null;
-    for (const linha of linhasItem) {
-      if (!linha.texto || isLixo(linha.texto)) continue;
-
-      // Classifica tokens por coluna
-      const cols = { codigo:[], desc:[], qtd:[], unit:[], total:[] };
-      linha.tokens.forEach(t => {
-        if (isLixo(t.str)) return;
-        if (t.x < colX.desc - 5)          cols.codigo.push(t.str);
-        else if (t.x < colX.qtd - 5)      cols.desc.push(t.str);
-        else if (t.x < colX.unit - 5)     cols.qtd.push(t.str);
-        else if (t.x < colX.total - 5)    cols.unit.push(t.str);
-        else                               cols.total.push(t.str);
-      });
-
-      const temCodigo = cols.codigo.length > 0 && /^\d{3,}$/.test(cols.codigo.join(''));
-      const temValor  = cols.total.length > 0;
-
-      if (temCodigo) {
-        if (item && item.valorTotal > 0) itens.push(item);
-        const vUnit = cols.unit.join('').replace(/[R$\s]/g,'').replace(/\./g,'').replace(',','.');
-        const vTot  = cols.total.join('').replace(/[R$\s]/g,'').replace(/\./g,'').replace(',','.');
-        const qtd   = cols.qtd.join('').replace(',','.');
-        item = {
-          codigo: cols.codigo.join(''),
-          descricao: cols.desc.join(' ').trim(),
-          ncm:'', cfop:'', unidade:'UN',
-          quantidade:   qtd   ? parseFloat(qtd)   : 0,
-          valorUnitario: vUnit ? parseFloat(vUnit) : 0,
-          valorTotal:   vTot  ? parseFloat(vTot)  : 0,
-          desconto: 0,
-        };
-        if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
-      } else if (item) {
-        // continuação do item anterior
-        if (cols.desc.length)  item.descricao += ' ' + cols.desc.join(' ');
-        if (cols.qtd.length && item.quantidade === 0)
-          item.quantidade = parseFloat(cols.qtd.join('').replace(',','.'));
-        if (cols.unit.length && item.valorUnitario === 0)
-          item.valorUnitario = parseFloat(cols.unit.join('').replace(/[R$\s]/g,'').replace(/\./g,'').replace(',','.'));
-        if (temValor && item.valorTotal === 0)
-          item.valorTotal = parseFloat(cols.total.join('').replace(/[R$\s]/g,'').replace(/\./g,'').replace(',','.'));
-        if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
+    // Determina xQtd e xValor a partir dos tokens R$ encontrados na seção
+    const xsRS = [];
+    secao.forEach(l => l.tokens.forEach(t => { if(t.str==='R$') xsRS.push(t.x); }));
+    xsRS.sort((a,b)=>a-b);
+    // Dois grupos de R$: Valor Unit. e Valor Total
+    let xUnit=0, xTotal=0;
+    if (xsRS.length>=2) {
+      // agrupa por proximidade
+      const grupos = [];
+      let g=[xsRS[0]];
+      for(let i=1;i<xsRS.length;i++){
+        if(xsRS[i]-xsRS[i-1]<15) g.push(xsRS[i]);
+        else { grupos.push(g); g=[xsRS[i]]; }
+      }
+      grupos.push(g);
+      if(grupos.length>=2){
+        xUnit  = Math.round(grupos[grupos.length-2].reduce((s,v)=>s+v,0)/grupos[grupos.length-2].length);
+        xTotal = Math.round(grupos[grupos.length-1].reduce((s,v)=>s+v,0)/grupos[grupos.length-1].length);
+      } else if(grupos.length===1){
+        xTotal = Math.round(grupos[0].reduce((s,v)=>s+v,0)/grupos[0].length);
+        xUnit  = xTotal-50;
       }
     }
-    if (item && item.valorTotal > 0) itens.push(item);
+    // xQtd: posição da coluna Qtd no header
+    let xQtd = 0;
+    linhas[idxH].tokens.forEach(t=>{ if(/qtd/i.test(t.str)) xQtd=t.x; });
+    if(!xQtd && xUnit>0) xQtd = xUnit-40;
+
+    const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
+
+    let item = null;
+    for (const linha of secao) {
+      if (!linha.texto||isLixo(linha.texto)) continue;
+
+      // Separa tokens por zona: esquerda=codigo+desc, meio=qtd, direita=valores
+      const zEsq=[], zQtd=[], zUnit=[], zTotal=[];
+      linha.tokens.forEach(t=>{
+        if(isLixo(t.str)) return;
+        if (xQtd>0 && t.x >= xQtd-10 && t.x < (xUnit||xQtd+50)-10) zQtd.push(t.str);
+        else if (xUnit>0 && t.x >= xUnit-10 && t.x < xTotal-10)      zUnit.push(t.str);
+        else if (xTotal>0 && t.x >= xTotal-10)                        zTotal.push(t.str);
+        else                                                           zEsq.push(t.str);
+      });
+
+      const esqTxt   = zEsq.join(' ').trim();
+      const mCodigo  = esqTxt.match(/^(\d{3,})(\s+(.*))?$/);
+      const temValor = zTotal.filter(s=>s!=='R$').length>0;
+      const qtdVal   = zQtd.filter(s=>s!=='R$'&&!/^R/.test(s)).join('').trim();
+
+      if (mCodigo) {
+        if (item&&item.valorTotal>0) itens.push(item);
+        const vU = zUnit.filter(s=>s!=='R$').join('').replace(/\./g,'').replace(',','.');
+        const vT = zTotal.filter(s=>s!=='R$').join('').replace(/\./g,'').replace(',','.');
+        item = {
+          codigo: mCodigo[1],
+          descricao: (mCodigo[3]||'').trim(),
+          ncm:'',cfop:'',unidade:'UN',
+          quantidade:  qtdVal ? parseFloat(qtdVal) : 0,
+          valorUnitario: vU ? parseFloat(vU) : 0,
+          valorTotal:    vT ? parseFloat(vT) : 0,
+          desconto:0,
+        };
+        if(item.quantidade>0&&item.valorTotal>0){itens.push(item);item=null;}
+      } else if (item) {
+        // continuação: texto vai para descrição, valores fecham o item
+        if(esqTxt&&!isLixo(esqTxt)) item.descricao += ' '+esqTxt;
+        if(qtdVal&&!item.quantidade) item.quantidade=parseFloat(qtdVal);
+        if(zUnit.filter(s=>s!=='R$').length&&!item.valorUnitario)
+          item.valorUnitario=parseFloat(zUnit.filter(s=>s!=='R$').join('').replace(/\./g,'').replace(',','.'));
+        if(temValor&&!item.valorTotal)
+          item.valorTotal=parseFloat(zTotal.filter(s=>s!=='R$').join('').replace(/\./g,'').replace(',','.'));
+        if(item.quantidade>0&&item.valorTotal>0){itens.push(item);item=null;}
+      }
+    }
+    if(item&&item.valorTotal>0) itens.push(item);
   }
 
   return {
-    id: crypto.randomUUID(), tipo:'Cupom', fonte:'PDF', arquivo:file.name,
+    id:crypto.randomUUID(), tipo:'Cupom', fonte:'PDF', arquivo:file.name,
     emissor:nome, cnpj, uf,
-    destNome:'', destCNPJ:'',
-    numero, serie, natOp:'Venda ao consumidor', chave,
-    dataEmissao, dataSaida,
-    valorNota, valorProd:valorNota, desconto, frete:0, icms:0, pis:0, cofins:0,
-    itens, pags:[], textoExtraido: texto.slice(0,3000),
+    destNome:'',destCNPJ:'',
+    numero,serie,natOp:'Venda ao consumidor',chave,
+    dataEmissao,dataSaida,
+    valorNota,valorProd:valorNota,desconto,frete:0,icms:0,pis:0,cofins:0,
+    itens,pags:[],textoExtraido:texto.slice(0,3000),
   };
 }
 
