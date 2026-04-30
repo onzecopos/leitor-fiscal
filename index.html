@@ -393,6 +393,7 @@ tbody tr:hover td{background:var(--blue-ll);}
               <th>Emissor</th>
               <th>CNPJ</th>
               <th>Nº</th>
+              <th>Série</th>
               <th>Emissão / Saída</th>
               <th class="tr">Valor</th>
               <th>Chave de Acesso</th>
@@ -401,7 +402,7 @@ tbody tr:hover td{background:var(--blue-ll);}
             </tr>
           </thead>
           <tbody id="docs-body">
-            <tr class="empty-row"><td colspan="10">Nenhum documento importado ainda.</td></tr>
+            <tr class="empty-row"><td colspan="11">Nenhum documento importado ainda.</td></tr>
           </tbody>
         </table>
       </div>
@@ -581,24 +582,40 @@ async function parsePDF(file) {
   const texto = linhas.join('\n');
   const rFirst = (pat) => { for(const l of linhas){const m=l.match(pat);if(m)return m;} return null; };
 
-  // CNPJ — procura padrão XX.XXX.XXX/XXXX-XX na linha que contenha "CNPJ"
+  // CNPJ — procura em todo o texto, priorizando linha com "CNPJ:"
   let cnpj = '';
+  const cnpjPat = /(\d{2}[\.\-]?\d{3}[\.\-]?\d{3}[\s\/]?\d{4}[\.\-]?\d{2})/;
+  // primeiro tenta linha explícita com "CNPJ:"
   for (const l of linhas) {
-    const m = l.match(/(\d{2}[\.\-]?\d{3}[\.\-]?\d{3}[\s\/]?\d{4}[\.\-]?\d{2})/);
-    if (m) { cnpj = m[1]; break; }
+    if (/CNPJ/i.test(l)) {
+      const m = l.match(cnpjPat);
+      if (m) { cnpj = m[1]; break; }
+    }
+  }
+  // fallback: primeira ocorrência no texto
+  if (!cnpj) {
+    for (const l of linhas) {
+      const m = l.match(cnpjPat);
+      if (m) { cnpj = m[1]; break; }
+    }
   }
 
-  // Nome do emissor — primeira linha com texto, antes do CNPJ, sem dígitos dominando
+  // Nome do emissor — pode estar na mesma linha que o CNPJ ("Nome - CNPJ: XX")
+  // ou em linha separada antes dele
   let nome = '';
   for (const l of linhas) {
     const t = l.trim();
     if (!t || t.length < 4) continue;
-    // pula linhas que são só números/chave/endereço de URL
     if (/^\d[\d\s\.\-\/]+$/.test(t)) continue;
     if (/https?:\/\//i.test(t)) continue;
     if (/^(documento|nfc|nf-e|danfe|consulte|protocolo|data\s+de)/i.test(t)) continue;
-    // linha com letras suficientes
-    if ((t.match(/[a-zA-ZÀ-ú]/g)||[]).length > 4) { nome = t; break; }
+    if ((t.match(/[a-zA-ZÀ-ú]/g)||[]).length > 4) {
+      // remove a parte do CNPJ se estiver na mesma linha
+      nome = t.replace(/[\-–]?\s*CNPJ\s*[:\-]?\s*[\d\.\-\/]+/i, '').trim();
+      // remove traços soltos no final
+      nome = nome.replace(/[\s\-–]+$/, '').trim();
+      break;
+    }
   }
   if (!nome) nome = file.name.replace('.pdf','');
 
@@ -736,7 +753,7 @@ function consultaURL(d) {
 function renderDocs(){
   const filtered=getFilteredDocs();
   const body=document.getElementById('docs-body');
-  if(!filtered.length){body.innerHTML='<tr class="empty-row"><td colspan="10">Nenhum documento encontrado.</td></tr>';return;}
+  if(!filtered.length){body.innerHTML='<tr class="empty-row"><td colspan="11">Nenhum documento encontrado.</td></tr>';return;}
   body.innerHTML=filtered.map(d=>{
     const bc=d.fonte==='PDF'?'b-pdf':d.tipo==='NFC-e'?'b-nfce':'b-nfe';
     const d2=d.dataSaida&&d.dataSaida!==d.dataEmissao;
@@ -758,6 +775,7 @@ function renderDocs(){
       <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.emissor||'—'}</td>
       <td class="mono">${fmtCNPJ(d.cnpj)}</td>
       <td class="mono" style="color:var(--muted)">${d.numero||'—'}</td>
+      <td class="mono" style="color:var(--muted)">${d.serie||'—'}</td>
       <td><div class="two-d"><span class="d1">${fmtD(d.dataEmissao)}</span>${d2?`<span class="d2">↳ saída: ${fmtD(d.dataSaida)}</span>`:''}</div></td>
       <td class="tr mono" style="font-weight:600;color:var(--blue-d)">${brl(d.valorNota)}</td>
       ${chaveCell}
@@ -891,36 +909,35 @@ function exportXLSX(){
   if(!ds.length){toast('Nenhum documento para exportar','err');return;}
   const wb=XLSX.utils.book_new();
 
-  const header=['Tipo','Emissor','CNPJ','Nº','Série','Data Emissão','Data Saída/Entrada','Valor Nota','Desconto','Frete','ICMS',
-    'Cód. Produto','Descrição Produto','NCM','CFOP','Unidade','Quantidade','Valor Unit.','Valor Total Item','Link Consulta','Arquivo'];
+  const header=['Tipo','Emissor','CNPJ','Nº','Série','Data Emissão','Data Saída/Entrada','Valor Nota','Desconto',
+    'Cód. Produto','Descrição Produto','Unidade','Quantidade','Valor Unit.','Valor Total Item','Chave de Acesso','Link Consulta','Arquivo'];
   const rows=[header];
 
   ds.forEach(d=>{
     const url=consultaURL(d)||'';
     if(d.itens.length===0){
       rows.push([d.tipo,d.emissor,d.cnpj,d.numero,d.serie,d.dataEmissao,d.dataSaida,
-        d.valorNota,d.desconto,d.frete,d.icms,
-        '','','','','','','','',url,d.arquivo]);
+        d.valorNota,d.desconto,
+        '','','','','','',d.chave,url,d.arquivo]);
     } else {
       d.itens.forEach(i=>{
         rows.push([d.tipo,d.emissor,d.cnpj,d.numero,d.serie,d.dataEmissao,d.dataSaida,
-          d.valorNota,d.desconto,d.frete,d.icms,
-          i.codigo,i.descricao,i.ncm,i.cfop,i.unidade,i.quantidade,i.valorUnitario,i.valorTotal,
-          url,d.arquivo]);
+          d.valorNota,d.desconto,
+          i.codigo,i.descricao,i.unidade,i.quantidade,i.valorUnitario,i.valorTotal,
+          d.chave,url,d.arquivo]);
       });
     }
   });
 
   const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols']=[{wch:8},{wch:30},{wch:18},{wch:8},{wch:6},{wch:14},{wch:18},{wch:13},{wch:10},{wch:10},{wch:10},
-    {wch:12},{wch:30},{wch:10},{wch:8},{wch:8},{wch:10},{wch:13},{wch:14},{wch:60},{wch:35}];
+  ws['!cols']=[{wch:8},{wch:30},{wch:18},{wch:8},{wch:6},{wch:14},{wch:18},{wch:13},{wch:10},
+    {wch:12},{wch:30},{wch:8},{wch:10},{wch:13},{wch:14},{wch:44},{wch:60},{wch:35}];
 
-  // Formata coluna "Link Consulta" (índice 19) como hiperlink clicável
-  const linkCol=19;
+  // Link consulta como hiperlink clicável (coluna índice 16)
   rows.slice(1).forEach((row,ri)=>{
-    const url=row[linkCol];
+    const url=row[16];
     if(!url) return;
-    const cellRef=XLSX.utils.encode_cell({r:ri+1,c:linkCol});
+    const cellRef=XLSX.utils.encode_cell({r:ri+1,c:16});
     ws[cellRef]={v:url,t:'s',l:{Target:url,Tooltip:'Consultar no portal da Fazenda'}};
   });
 
