@@ -605,7 +605,16 @@ async function parsePDF(file) {
     if (m) cnpj = m[1].replace(/\s/g,'');
   }
 
-  // Nome do emissor — pode estar na mesma linha que o CNPJ ("Nome - CNPJ: XX")
+  // UF — extrai sigla do estado do endereço (ex: "Rio de Janeiro - RJ - CEP" ou "- RJ -")
+  let uf = '';
+  const ufs = ['AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG','PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'];
+  for (const l of linhas) {
+    const m = l.match(/\b([A-Z]{2})\b\s*[-–]?\s*CEP/);
+    if (m && ufs.includes(m[1])) { uf = m[1]; break; }
+    const m2 = l.match(/[-–]\s*([A-Z]{2})\s*[-–]/);
+    if (m2 && ufs.includes(m2[1])) { uf = m2[1]; break; }
+  }
+
   // ou em linha separada antes dele
   let nome = '';
   for (const l of linhas) {
@@ -690,7 +699,7 @@ async function parsePDF(file) {
 
   return {
     id: crypto.randomUUID(), tipo:'Cupom', fonte:'PDF', arquivo:file.name,
-    emissor:nome, cnpj, uf:'',
+    emissor:nome, cnpj, uf,
     destNome:'', destCNPJ:'',
     numero, serie, natOp:'Venda ao consumidor', chave,
     dataEmissao, dataSaida,
