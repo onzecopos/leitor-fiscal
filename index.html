@@ -666,6 +666,15 @@ async function parsePDF(file) {
   const idxF = linhas.findIndex(l=>/Qtde\.?\s*total\s*de\s*itens/i.test(l.texto));
   const itens = [];
 
+  // DEBUG MÍNIMO
+  const logEl = document.getElementById('log');
+  if (logEl) {
+    logEl.style.display='block';
+    logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> idxH=${idxH} idxF=${idxF}</div>`;
+    if (idxH>=0) logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> header tokens: ${linhas[idxH].tokens.map(t=>`[x${t.x}:"${t.str}"]`).join(' ')}</div>`;
+    if (idxH>=0) logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> hUniq count seria: veja linha seguinte</div>`;
+  }
+
   if (idxH >= 0) {
     const fim = idxF>=0 ? idxF : linhas.length;
     const secao = linhas.slice(idxH+1, fim);
@@ -687,7 +696,8 @@ async function parsePDF(file) {
     const xUnit  = hUniq[3].x;
     const xTotal = hUniq[4].x;
 
-    // Classifica token na coluna pela faixa X
+    if (logEl) logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> hUniq=${hUniq.length} xCod=${xCod} xDesc=${xDesc} xQtd=${xQtd} xUnit=${xUnit} xTotal=${xTotal}</div>`;
+    if (logEl && secao[0]) logEl.innerHTML += `<div style="color:#aaa;font-size:11px">> 1ª linha itens: ${secao[0].tokens.map(t=>`[x${t.x}:"${t.str}"]`).join(' ')}</div>`;
     const colDe = x => {
       if (x < xDesc - 5)  return 'cod';
       if (x < xQtd  - 5)  return 'desc';
