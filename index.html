@@ -666,33 +666,85 @@ async function parsePDF(file) {
             || rFirst(/(\d{3,})\s+S[eé]rie\s*(\d+)/i);
   if (mNum) { numero=mNum[1]; serie=mNum[2]; }
 
-  // Itens — linhas com padrão: código descrição qtd R$ valor_unit R$ valor_total
+  // Itens — estratégia: trabalha com o texto posicional (allItems) para reconstruir
+  // linhas de produto que podem ter descrição quebrada em múltiplas linhas
+  // Lógica: encontra blocos entre "Código Descrição..." e "Qtde. total de itens"
   const itens = [];
-  for (const l of linhas) {
-    // padrão: (código) descrição ... qtd ... R$ X,XX ... R$ Y,YY
-    const m = l.match(/^(\d{4,})\s+(.+?)\s+(\d+)\s+R\$\s*([\d\.]+,\d{2})\s+R\$\s*([\d\.]+,\d{2})/i);
-    if (m) {
-      itens.push({
-        codigo: m[1],
-        descricao: m[2].trim(),
-        ncm:'', cfop:'',
-        unidade: 'UN',
-        quantidade: parseFloat(m[3]),
-        valorUnitario: parseFloat(m[4].replace(/\./g,'').replace(',','.')),
-        valorTotal: parseFloat(m[5].replace(/\./g,'').replace(',','.')),
-        desconto: 0,
-      });
+  const textoLinhas = linhas.join('\n');
+
+  // Delimita a seção de itens
+  const inicioItens = textoLinhas.search(/Código\s+Descrição\s+Qtd/i);
+  const fimItens    = textoLinhas.search(/Qtde\.?\s*total\s*de\s*itens/i);
+  const secaoItens  = inicioItens >= 0 && fimItens > inicioItens
+    ? textoLinhas.slice(inicioItens, fimItens)
+    : textoLinhas;
+
+  const linhasItens = secaoItens.split('\n').slice(1); // remove header
+
+  // Padrão de linha de item: começa com código numérico + tem R$ no final
+  // Agrupa linhas de continuação (descrição quebrada) com o item anterior
+  const blocos = [];
+  for (const l of linhasItens) {
+    const l2 = l.trim();
+    if (!l2) continue;
+    // linha principal: código (4+ dígitos) + conteúdo com R$
+    const mPrincipal = l2.match(/^(\d{4,})\s+(.+?)\s+(\d+)\s+R\$\s*([\d\.]+,\d{2})\s+R\$\s*([\d\.]+,\d{2})$/i);
+    if (mPrincipal) {
+      blocos.push({ tipo:'completo', m: mPrincipal });
       continue;
     }
-    // padrão alternativo sem código: descrição qtd x R$ valor_unit = R$ valor_total
-    const m2 = l.match(/^(.+?)\s+(\d+)\s*[xX]\s*R\$\s*([\d\.]+,\d{2})\s*=?\s*R\$\s*([\d\.]+,\d{2})/i);
-    if (m2) {
+    // linha com código no início mas descrição continua na próxima (sem R$)
+    const mCodigo = l2.match(/^(\d{4,})\s+(.+)$/);
+    if (mCodigo && !l2.includes('R$') && blocos.length === 0 || (mCodigo && !l2.includes('R$'))) {
+      blocos.push({ tipo:'inicio', codigo: mCodigo[1], desc: mCodigo[2] });
+      continue;
+    }
+    // linha de continuação com qtd + valores (fecha item anterior)
+    const mFim = l2.match(/^(.+?)\s+(\d+)\s+R\$\s*([\d\.]+,\d{2})\s+R\$\s*([\d\.]+,\d{2})$/i);
+    if (mFim && blocos.length > 0 && blocos[blocos.length-1].tipo === 'inicio') {
+      const prev = blocos[blocos.length-1];
+      prev.tipo = 'completo_manual';
+      prev.descExtra = mFim[1];
+      prev.qtd = mFim[2]; prev.vUnit = mFim[3]; prev.vTotal = mFim[4];
+      continue;
+    }
+    // linha só com qtd + valores (descrição estava na linha do código)
+    const mSoValores = l2.match(/^(\d+)\s+R\$\s*([\d\.]+,\d{2})\s+R\$\s*([\d\.]+,\d{2})$/i);
+    if (mSoValores && blocos.length > 0 && blocos[blocos.length-1].tipo === 'inicio') {
+      const prev = blocos[blocos.length-1];
+      prev.tipo = 'completo_manual';
+      prev.qtd = mSoValores[1]; prev.vUnit = mSoValores[2]; prev.vTotal = mSoValores[3];
+      continue;
+    }
+    // linha de continuação de descrição (sem código, sem R$, não é lixo)
+    if (blocos.length > 0 && blocos[blocos.length-1].tipo === 'inicio') {
+      // ignora lixo como "Nacional:", "leitorfiscal", URLs
+      if (!/nacional|estadual|municipal|importado|leitorfiscal|https?:/i.test(l2)) {
+        blocos[blocos.length-1].desc += ' ' + l2;
+      }
+    }
+  }
+
+  // Converte blocos em itens
+  for (const b of blocos) {
+    if (b.tipo === 'completo') {
       itens.push({
-        codigo:'', descricao:m2[1].trim(), ncm:'', cfop:'', unidade:'UN',
-        quantidade: parseFloat(m2[2]),
-        valorUnitario: parseFloat(m2[3].replace(/\./g,'').replace(',','.')),
-        valorTotal: parseFloat(m2[4].replace(/\./g,'').replace(',','.')),
-        desconto:0,
+        codigo: b.m[1], descricao: b.m[2].trim(),
+        ncm:'', cfop:'', unidade:'UN',
+        quantidade: parseFloat(b.m[3]),
+        valorUnitario: parseFloat(b.m[4].replace(/\./g,'').replace(',','.')),
+        valorTotal: parseFloat(b.m[5].replace(/\./g,'').replace(',','.')),
+        desconto: 0,
+      });
+    } else if (b.tipo === 'completo_manual' && b.qtd) {
+      const descFull = b.descExtra ? `${b.desc} ${b.descExtra}`.trim() : b.desc.trim();
+      itens.push({
+        codigo: b.codigo, descricao: descFull,
+        ncm:'', cfop:'', unidade:'UN',
+        quantidade: parseFloat(b.qtd),
+        valorUnitario: parseFloat(b.vUnit.replace(/\./g,'').replace(',','.')),
+        valorTotal: parseFloat(b.vTotal.replace(/\./g,'').replace(',','.')),
+        desconto: 0,
       });
     }
   }
