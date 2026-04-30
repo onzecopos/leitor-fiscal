@@ -750,8 +750,11 @@ async function parsePDF(file) {
       acum = { cod:'', desc:'', qtd:0, unit:0, tot:0 };
     };
 
-    for (const r of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+
       if (r.tot > 0) {
+        // Linha com valor — acumula e fecha
         acum.cod  += r.cod;
         if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
         if (!acum.qtd) acum.qtd = r.qtd;
@@ -759,17 +762,26 @@ async function parsePDF(file) {
         acum.tot = r.tot;
         flush(r.y);
       } else {
-        // Linha sem valor: pertence ao item fechado anterior ou ao próximo?
-        // Se dy em relação ao último item fechado é pequeno (≤8px), é continuação dele
-        const dyFechado = ultimoItem ? r.y - lastClosedY : 999;
-        const acumVazio = acum.cod==='' && acum.desc==='' && acum.qtd===0;
+        // Linha sem valor — determina se é pós-item ou pré-item
+        // Olha para frente: se a próxima linha com valor tem código próprio,
+        // essa linha sem valor é pré-item (do próximo). Senão, é pós-item (do anterior).
+        const proxComValor = rows.slice(i+1).find(x => x.tot > 0);
+        const proxTemCod = proxComValor && /^\d+$/.test(proxComValor.cod) && proxComValor.cod.length > 0;
 
-        if (acumVazio && dyFechado <= 8 && ultimoItem) {
-          // Continuação do item já fechado
+        // Se o acumulador já tem código, essa linha é sempre continuação (pré-item)
+        // Se o acumulador está vazio E o próximo item COM VALOR tem código próprio,
+        // essa linha pode ser pós-item (continuação do fechado) OU pré-item
+        // Usamos: se o próximo item com valor TEM código → linha é pós-item (não precisa de prefixo)
+        //         se o próximo item com valor NÃO tem código → linha é pré-item (valores sem código)
+
+        const acumTemConteudo = acum.cod !== '' || acum.desc !== '';
+
+        if (!acumTemConteudo && proxTemCod && ultimoItem) {
+          // Acumulador vazio + próximo item tem código próprio = pós-item
           if (r.desc) ultimoItem.descricao = (ultimoItem.descricao + ' ' + r.desc).trim();
-          lastClosedY = r.y; // atualiza para encadear múltiplas linhas
+          lastClosedY = r.y;
         } else {
-          // Pertence ao próximo item
+          // Pré-item — acumula para o próximo
           acum.cod  += r.cod;
           if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
           if (!acum.qtd && r.qtd) acum.qtd = r.qtd;
