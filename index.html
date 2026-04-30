@@ -706,27 +706,42 @@ async function parsePDF(file) {
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
-    // Parser de itens baseado nos padrões reais do debug.
-    // Cada item pode ocupar várias linhas. Uma linha pode ser:
-    // A) Completa: tem código + desc + qtd + valores → item fechado
-    // B) Início:   tem código + desc (sem valores) → abre item
-    // C) Valores:  tem qtd + valores (sem código) → fecha item aberto
-    // D) Desc:     só descrição → acumula no item aberto
-    // E) Sufixo:   só código pequeno (resto do código longo) → acumula no item aberto OU descarta
-    //
-    // Regra chave: linha sem valores SÓ acumula se o item atual ainda está aberto (sem tot).
-    // Linha sem valores com item já fechado → descarta (é sufixo órfão como "82", "280" etc.)
+    // Abordagem por largura de coluna de descrição:
+    // Calcula quantos px a coluna de descrição tem e estima o limite de caracteres.
+    // Se a desc de uma linha preenche quase toda a coluna, a próxima linha é continuação.
+    const larguraDesc = xQtd - xDesc; // px disponíveis para descrição
+    // Cada caractere ocupa aproximadamente larguraDesc / maxChars pixels
+    // Descoberto empiricamente: coluna ~76px, fonte ~6px/char ≈ 12 chars
+    // Usamos uma heurística: se a desc tem >= 80% dos chars do maior desc visto, é truncada
+    // Abordagem mais simples e robusta: linha de continuação = tem x=xDesc mas NÃO tem xCod nem valores
 
+    // Primeiro passo: identificar quais linhas são "sufixos de código" (ex: "82", "055", "280")
+    // Sufixo de código = linha com APENAS token em xCod (número curto), sem desc e sem valores
+    // Estas linhas devem ser IGNORADAS pois o código já foi capturado na linha principal
+
+    const isSufixoCodigo = (l) => {
+      const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
+      l.tokens.forEach(t => { if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str); });
+      const temDesc  = cols.desc.length > 0;
+      const temValor = extraiVal(cols.total) > 0 || extraiVal(cols.unit) > 0;
+      const temQtd   = extraiQtd(cols.qtd) > 0;
+      const codTxt   = cols.cod.join('').trim();
+      const ehNumero = /^\d+$/.test(codTxt);
+      // É sufixo se: tem código numérico, sem descrição própria, sem valores, sem qtd
+      return ehNumero && !temDesc && !temValor && !temQtd;
+    };
+
+    // Segundo passo: montar itens linha a linha
+    // Regra: linha com valores fecha item. Linha só com desc (x=xDesc, sem xCod) = continuação.
     const blocos = [];
     let bAtual = null;
 
     for (const linha of secao) {
       if (!linha.texto || isLixo(linha.texto)) continue;
+      if (isSufixoCodigo(linha)) continue; // ignora sufixos de código
 
       const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
-      linha.tokens.forEach(t => {
-        if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str);
-      });
+      linha.tokens.forEach(t => { if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str); });
 
       const codTxt  = cols.cod.join('').trim();
       const descTxt = cols.desc.join(' ').trim();
@@ -735,40 +750,28 @@ async function parsePDF(file) {
       const qtdV    = extraiQtd(cols.qtd);
       const temQtd  = qtdV > 0;
       const temTot  = totalV > 0;
+      const temCod  = /^\d+$/.test(codTxt) && codTxt.length > 0;
 
       if (temTot && temQtd) {
-        // Linha com valores completos
         if (bAtual && bAtual.tot === 0) {
-          // Fecha bloco aberto
-          if (codTxt) bAtual.cod += codTxt;
+          // Fecha bloco aberto com os valores desta linha
           if (descTxt) bAtual.desc += (bAtual.desc?' ':'')+descTxt;
-          bAtual.qtd = qtdV; bAtual.unit = unitV; bAtual.tot = totalV;
-          blocos.push(bAtual); bAtual = null;
+          bAtual.qtd=qtdV; bAtual.unit=unitV; bAtual.tot=totalV;
+          blocos.push(bAtual); bAtual=null;
         } else {
-          // Novo item completo numa linha
+          // Item completo numa linha
           if (bAtual) blocos.push(bAtual);
-          blocos.push({ cod:codTxt, desc:descTxt, qtd:qtdV, unit:unitV, tot:totalV });
-          bAtual = null;
+          blocos.push({cod:codTxt, desc:descTxt, qtd:qtdV, unit:unitV, tot:totalV});
+          bAtual=null;
         }
-      } else if (!temTot && !temQtd) {
-        // Linha sem valores
-        if (bAtual && bAtual.tot === 0) {
-          // Item ainda aberto — acumula fragmentos
-          if (codTxt) bAtual.cod += codTxt;
-          if (descTxt) bAtual.desc += (bAtual.desc?' ':'')+descTxt;
-        } else if (codTxt || descTxt) {
-          // Item fechado ou inexistente — inicia novo bloco
-          if (bAtual) blocos.push(bAtual);
-          bAtual = { cod:codTxt, desc:descTxt, qtd:0, unit:0, tot:0 };
-        }
-        // Se não tem nada útil, ignora
-      } else if (temQtd && !temTot) {
-        // Tem qtd mas não total — acumula qtd no bloco aberto
-        if (bAtual && bAtual.tot === 0) {
-          if (codTxt) bAtual.cod += codTxt;
-          if (descTxt) bAtual.desc += (bAtual.desc?' ':'')+descTxt;
-          if (!bAtual.qtd) bAtual.qtd = qtdV;
-          if (!bAtual.unit) bAtual.unit = unitV;
+      } else if (temCod && !temTot) {
+        // Linha com código mas sem valores = início de novo item
+        if (bAtual) blocos.push(bAtual);
+        bAtual = {cod:codTxt, desc:descTxt, qtd:qtdV||0, unit:unitV||0, tot:0};
+      } else if (!temCod && !temTot && descTxt) {
+        // Só descrição = continuação do item atual
+        if (bAtual) {
+          bAtual.desc += (bAtual.desc?' ':'')+descTxt;
         }
       }
     }
@@ -777,9 +780,9 @@ async function parsePDF(file) {
     for (const b of blocos) {
       if (b.tot > 0 && b.qtd > 0) {
         itens.push({
-          codigo: b.cod, descricao: b.desc.trim(),
+          codigo:b.cod, descricao:b.desc.trim(),
           ncm:'', cfop:'', unidade:'UN',
-          quantidade: b.qtd, valorUnitario: b.unit, valorTotal: b.tot, desconto: 0,
+          quantidade:b.qtd, valorUnitario:b.unit, valorTotal:b.tot, desconto:0,
         });
       }
     }
