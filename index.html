@@ -736,9 +736,9 @@ async function parsePDF(file) {
       const temQtd   = qtdV > 0;
 
       if (temValor && temQtd) {
-        // Linha com valores — pode ter código e/ou desc na mesma linha
+        // Linha com valores — fecha o bloco atual ou cria novo completo
         if (bAtual && !bAtual.fechado) {
-          // Complementa bloco atual com valores
+          // Complementa bloco aberto com valores
           if (codTxt) bAtual.cod += codTxt;
           if (descTxt) bAtual.desc += (bAtual.desc ? ' ' : '') + descTxt;
           bAtual.qtd  = qtdV;
@@ -746,19 +746,19 @@ async function parsePDF(file) {
           bAtual.tot  = totalV;
           bAtual.fechado = true;
         } else {
-          // Novo bloco completo em uma linha
-          if (bAtual && bAtual.fechado) blocos.push(bAtual);
+          // Bloco anterior já fechado — salva e abre novo
+          if (bAtual) blocos.push(bAtual);
           bAtual = { cod: codTxt, desc: descTxt, qtd: qtdV, unit: unitV, tot: totalV, fechado: true };
         }
       } else {
-        // Linha sem valores — pode ser início de item ou continuação
+        // Linha sem valores
         if (bAtual && !bAtual.fechado) {
-          // Continuação: acumula código e descrição
+          // Bloco aberto — acumula (fragmento de código longo ou desc quebrada)
           if (codTxt) bAtual.cod += codTxt;
           if (descTxt) bAtual.desc += (bAtual.desc ? ' ' : '') + descTxt;
         } else {
-          // Inicia novo bloco
-          if (bAtual && bAtual.fechado) blocos.push(bAtual);
+          // Bloco fechado ou inexistente — inicia novo bloco
+          if (bAtual) blocos.push(bAtual);
           bAtual = { cod: codTxt, desc: descTxt, qtd: 0, unit: 0, tot: 0, fechado: false };
         }
       }
