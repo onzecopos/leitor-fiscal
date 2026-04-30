@@ -706,70 +706,64 @@ async function parsePDF(file) {
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
-    // Classifica cada linha da seção de itens
-    const linhasInfo = secao
+    // Abordagem: reconstrói o texto da seção de itens coluna por coluna
+    // Para cada linha, separa tokens em 5 colunas pela posição X
+    // Depois agrupa linhas que pertencem ao mesmo item
+
+    // Cria uma representação estruturada de cada linha
+    const rows = secao
       .filter(l => l.texto && !isLixo(l.texto))
       .map(l => {
         const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
         l.tokens.forEach(t => { if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str); });
-        const cod  = cols.cod.join('').trim();
-        const desc = cols.desc.join(' ').trim();
-        const tot  = extraiVal(cols.total);
-        const unit = extraiVal(cols.unit);
-        const qtd  = extraiQtd(cols.qtd);
         return {
-          y: l.y, cod, desc, tot, unit, qtd,
-          temCod: /^\d+$/.test(cod) && cod.length > 0,
-          temVal: tot > 0,
-          temQtd: qtd > 0,
-          sufixo: /^\d+$/.test(cod) && !desc && tot===0 && qtd===0,
+          y: l.y,
+          cod:   cols.cod.join('').trim(),
+          desc:  cols.desc.join(' ').trim(),
+          tot:   extraiVal(cols.total),
+          unit:  extraiVal(cols.unit),
+          qtd:   extraiQtd(cols.qtd),
         };
       });
-    // Linhas consecutivas com espaçamento pequeno (≤10px) são do mesmo item.
-    // Linhas com espaçamento maior iniciam novo item.
-    // Esta abordagem independe de heurísticas de código ou descrição.
 
-    // Regra final baseada no debug:
-    // 1. Linha com CÓDIGO + VALORES na mesma linha = item completo (fecha qualquer anterior)
-    // 2. Linha com CÓDIGO sem valores = início de item (aguarda valores)
-    // 3. Linha com VALORES sem código = fecha item aberto
-    // 4. Linha só com DESC = acumula no item aberto
-    // 5. Linha só com número em xCod (sufixo) = ignorar
+    // Agrupa linhas em itens:
+    // Um novo item começa quando encontramos uma linha com valor total > 0
+    // (independente de ter código ou não).
+    // Todas as linhas SEM valor são acumuladas até encontrar uma linha COM valor.
 
-    let item = null;
-    for (const l of linhasInfo) {
-      const completo = l.temCod && l.temVal && l.temQtd;
-      const inicio   = l.temCod && !l.temVal;
-      const valores  = !l.temCod && l.temVal && l.temQtd;
-      const soDesc   = !l.temCod && !l.temVal && l.desc;
-      const sufixo   = l.sufixo;
+    let acum = { cod:'', desc:'', qtd:0, unit:0, tot:0 };
 
-      if (sufixo) continue;
-
-      if (completo) {
-        if (item) itens.push(item);
+    const flush = () => {
+      if (acum.tot > 0 && acum.qtd > 0) {
         itens.push({
-          codigo:l.cod, descricao:l.desc.trim(),
+          codigo: acum.cod, descricao: acum.desc.trim(),
           ncm:'', cfop:'', unidade:'UN',
-          quantidade:l.qtd, valorUnitario:l.unit, valorTotal:l.tot, desconto:0,
+          quantidade: acum.qtd, valorUnitario: acum.unit,
+          valorTotal: acum.tot, desconto: 0,
         });
-        item = null;
-      } else if (inicio) {
-        if (item) itens.push(item);
-        item = { codigo:l.cod, descricao:l.desc, quantidade:0, valorUnitario:0, valorTotal:0, ncm:'', cfop:'', unidade:'UN', desconto:0 };
-      } else if (valores) {
-        if (item) {
-          if (l.desc) item.descricao += (item.descricao?' ':'')+l.desc;
-          item.quantidade=l.qtd; item.valorUnitario=l.unit; item.valorTotal=l.tot;
-          itens.push(item); item=null;
-        }
-      } else if (soDesc) {
-        if (item) {
-          item.descricao += (item.descricao?' ':'')+l.desc;
-        }
+      }
+      acum = { cod:'', desc:'', qtd:0, unit:0, tot:0 };
+    };
+
+    for (const r of rows) {
+      if (r.tot > 0) {
+        // Linha com valor — fecha o item atual acumulando esta linha
+        acum.cod  += r.cod;
+        if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
+        if (!acum.qtd) acum.qtd = r.qtd;
+        if (!acum.unit) acum.unit = r.unit;
+        acum.tot = r.tot;
+        flush();
+      } else {
+        // Linha sem valor — acumula
+        // Mas se já temos um acum completo pendente (não deveria acontecer), flush
+        acum.cod  += r.cod;
+        if (r.desc) acum.desc += (acum.desc?' ':'')+r.desc;
+        if (!acum.qtd && r.qtd) acum.qtd = r.qtd;
+        if (!acum.unit && r.unit) acum.unit = r.unit;
       }
     }
-    if (item && item.valorTotal > 0) itens.push(item);
+    // Não faz flush final pois itens sem valor são fragmentos orphan
   }
 
   return {
