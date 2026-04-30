@@ -666,6 +666,13 @@ async function parsePDF(file) {
   const idxF = linhas.findIndex(l=>/Qtde\.?\s*total\s*de\s*itens/i.test(l.texto));
   const itens = [];
   const logEl = document.getElementById('log');
+  if (logEl && idxH >= 0) {
+    const secDbg = linhas.slice(idxH, Math.min(idxH+12, idxF>=0?idxF:linhas.length));
+    secDbg.forEach(l => {
+      logEl.style.display='block';
+      logEl.innerHTML += `<div style="color:#aaa;font-size:10px">Y${l.y}: ${l.tokens.map(t=>`[x${t.x}:"${t.str}"]`).join(' ')}</div>`;
+    });
+  }
 
   if (idxH >= 0) {
     const fim = idxF>=0 ? idxF : linhas.length;
@@ -728,7 +735,8 @@ async function parsePDF(file) {
       });
 
       const codigoStr = cols.cod.join('').trim();
-      const temCodigo = /^\d{3,}$/.test(codigoStr);
+      // Código: só dígitos, mínimo 2, na coluna correta (posição X próxima de xCod)
+      const temCodigo = /^\d{2,}$/.test(codigoStr);
       const unitVal   = extraiVal(cols.unit);
       const totalVal  = extraiVal(cols.total);
       const qtdVal    = extraiQtd(cols.qtd);
