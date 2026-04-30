@@ -775,42 +775,6 @@ async function parsePDF(file) {
         });
       }
     }
-        const descInicial = l.desc || descPendente;
-        descPendente = '';
-        item = {
-          codigo: l.cod, descricao: descInicial,
-          ncm:'', cfop:'', unidade:'UN',
-          quantidade: l.qtdV, valorUnitario: l.unitV, valorTotal: l.totalV, desconto: 0,
-        };
-        if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
-
-      } else if (l.temValor) {
-        if (item) {
-          if (l.desc) item.descricao += ' ' + l.desc;
-          if (l.qtdV && !item.quantidade) item.quantidade = l.qtdV;
-          if (l.unitV && !item.valorUnitario) item.valorUnitario = l.unitV;
-          item.valorTotal = l.totalV;
-          if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
-        }
-
-      } else if (l.desc) {
-        // Linha só com descrição — determina a qual item pertence
-        const idxProxCod = proxCodIdx(i);
-        const pertenceAoProximo = idxProxCod >= 0 && item && item.valorTotal === 0;
-
-        if (pertenceAoProximo) {
-          // Fecha item atual se estiver completo, senão acumula como desc do próximo
-          if (item && item.valorTotal > 0) { itens.push(item); item = null; }
-          descPendente = (descPendente + ' ' + l.desc).trim();
-        } else if (item) {
-          item.descricao += ' ' + l.desc;
-          if (item.quantidade > 0 && item.valorTotal > 0) { itens.push(item); item = null; }
-        } else {
-          descPendente = (descPendente + ' ' + l.desc).trim();
-        }
-      }
-    }
-    if (item && item.valorTotal > 0) itens.push(item);
   }
 
   return {
