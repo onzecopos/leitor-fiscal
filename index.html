@@ -726,6 +726,20 @@ async function parsePDF(file) {
     // Linhas com espaçamento maior iniciam novo item.
     // Esta abordagem independe de heurísticas de código ou descrição.
 
+    // Calcula espaçamento dinâmico: diferença Y entre as primeiras linhas de itens
+    // Linhas do mesmo item têm dy pequeno; itens diferentes têm dy maior
+    // Usa a mediana dos dy pequenos como threshold
+    const dys = [];
+    for (let i = 1; i < linhasInfo.length; i++) {
+      const dy = linhasInfo[i].y - linhasInfo[i-1].y;
+      if (dy > 0 && dy < 20) dys.push(dy);
+    }
+    dys.sort((a,b)=>a-b);
+    // Threshold = valor entre o menor dy (mesma linha) e o maior dy (item diferente)
+    const dyMin = dys[0] || 4;
+    const dyMax = dys[dys.length-1] || 16;
+    const dyThreshold = Math.round(dyMin + (dyMax - dyMin) * 0.45);
+
     // Agrupa linhas em blocos por proximidade Y
     const grupos = [];
     let gAtual = [];
@@ -742,7 +756,7 @@ async function parsePDF(file) {
       } else {
         const prev = gAtual[gAtual.length - 1];
         const dy = l.y - prev.y;
-        if (dy <= 10) {
+        if (dy <= dyThreshold) {
           // Próxima do anterior — mesmo grupo
           gAtual.push(l);
         } else {
