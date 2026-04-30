@@ -706,6 +706,15 @@ async function parsePDF(file) {
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
+    // DEBUG COMPLETO seção de itens
+    const logEl2 = document.getElementById('log');
+    if (logEl2) {
+      logEl2.style.display='block';
+      secao.forEach(l => {
+        logEl2.innerHTML += `<div style="color:#777;font-size:10px">Y${l.y}: ${l.tokens.map(t=>'[x'+t.x+':"'+t.str+'"]').join(' ')}</div>`;
+      });
+    }
+
     // Primeira passagem: classifica cada linha em tipo
     // tipo: 'item' (tem código), 'valores' (só valores), 'desc' (só descrição), 'misto' (código quebrado)
     const linhasClassif = [];
