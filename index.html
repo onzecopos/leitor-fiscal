@@ -384,7 +384,6 @@ tbody tr:hover td{background:var(--blue-ll);}
         <button class="btn primary" onclick="renderDocs()">Filtrar</button>
         <button class="btn" onclick="clearF()">Limpar</button>
         <button class="btn" style="margin-left:auto" onclick="exportXLSX()">⬇ Excel</button>
-        <button class="btn" onclick="exportCSV()">⬇ CSV</button>
       </div>
       <div class="table-wrap">
         <table>
@@ -397,11 +396,12 @@ tbody tr:hover td{background:var(--blue-ll);}
               <th>Emissão / Saída</th>
               <th class="tr">Valor</th>
               <th>Arquivo</th>
+              <th>Consulta</th>
               <th></th>
             </tr>
           </thead>
           <tbody id="docs-body">
-            <tr class="empty-row"><td colspan="8">Nenhum documento importado ainda.</td></tr>
+            <tr class="empty-row"><td colspan="9">Nenhum documento importado ainda.</td></tr>
           </tbody>
         </table>
       </div>
@@ -552,33 +552,135 @@ function parseXML(txt, filename) {
 async function parsePDF(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({data:buf}).promise;
-  let texto='';
+
+  // Coleta itens de texto com posição para reconstruir linhas reais
+  let allItems = [];
   for (let i=1;i<=pdf.numPages;i++) {
-    const page=await pdf.getPage(i);
-    const content=await page.getTextContent();
-    texto+=content.items.map(it=>it.str).join(' ')+'\n';
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const vp = page.getViewport({scale:1});
+    content.items.forEach(it => {
+      if (it.str.trim()) allItems.push({
+        str: it.str.trim(),
+        y: Math.round(vp.height - it.transform[5]), // inverte Y (topo = 0)
+        x: Math.round(it.transform[4])
+      });
+    });
   }
-  const linhas=texto.split(/[\n\r]+/);
-  const rFirst=(pat)=>{for(const l of linhas){const m=l.match(pat);if(m)return m;}return null;};
-  const mCNPJ=rFirst(/(\d{2}[\.\s]?\d{3}[\.\s]?\d{3}[\s\/]?\d{4}[-\s]?\d{2})/);
-  const cnpj=mCNPJ?mCNPJ[1]:'';
-  let nome='';
-  for(const l of linhas.slice(0,8)){const t=l.trim();if(t&&t.length>3&&!t.match(/^\d/)&&!t.match(/CNPJ/i)){nome=t;break;}}
-  if(!nome) nome=file.name.replace('.pdf','');
-  const datas=[];
-  for(const m of texto.matchAll(/\b(\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/g)){
-    try{const[d,mo,a]=m[1].includes('/')?m[1].split('/'):m[1].split('-').reverse();
-      datas.push(`${a.length===4?a:'20'+a}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`);}catch{}
+
+  // Agrupa por linha (mesma posição Y ± 4px)
+  const linhaMap = {};
+  allItems.forEach(it => {
+    const key = Math.round(it.y / 4) * 4;
+    linhaMap[key] = linhaMap[key] || [];
+    linhaMap[key].push(it);
+  });
+  const linhas = Object.keys(linhaMap).sort((a,b)=>a-b)
+    .map(k => linhaMap[k].sort((a,b)=>a.x-b.x).map(it=>it.str).join(' '));
+
+  const texto = linhas.join('\n');
+  const rFirst = (pat) => { for(const l of linhas){const m=l.match(pat);if(m)return m;} return null; };
+
+  // CNPJ — procura padrão XX.XXX.XXX/XXXX-XX na linha que contenha "CNPJ"
+  let cnpj = '';
+  for (const l of linhas) {
+    const m = l.match(/(\d{2}[\.\-]?\d{3}[\.\-]?\d{3}[\s\/]?\d{4}[\.\-]?\d{2})/);
+    if (m) { cnpj = m[1]; break; }
   }
-  const dataEmissao=datas[0]||new Date().toISOString().slice(0,10);
-  const dataSaida=datas[1]||dataEmissao;
-  let valorNota=0;
-  for(const pat of[/total\s*[:\-]?\s*r?\$?\s*([\d\.]+,\d{2})/i,/valor\s*(?:a\s*pagar|total)\s*[:\-]?\s*r?\$?\s*([\d\.]+,\d{2})/i,/\bR\$\s*([\d\.]+,\d{2})/]){
-    const m=rFirst(pat);if(m){valorNota=parseFloat(m[1].replace(/\./g,'').replace(',','.'));break;}
+
+  // Nome do emissor — primeira linha com texto, antes do CNPJ, sem dígitos dominando
+  let nome = '';
+  for (const l of linhas) {
+    const t = l.trim();
+    if (!t || t.length < 4) continue;
+    // pula linhas que são só números/chave/endereço de URL
+    if (/^\d[\d\s\.\-\/]+$/.test(t)) continue;
+    if (/https?:\/\//i.test(t)) continue;
+    if (/^(documento|nfc|nf-e|danfe|consulte|protocolo|data\s+de)/i.test(t)) continue;
+    // linha com letras suficientes
+    if ((t.match(/[a-zA-ZÀ-ú]/g)||[]).length > 4) { nome = t; break; }
   }
-  return {id:crypto.randomUUID(),tipo:'Cupom',fonte:'PDF',arquivo:file.name,emissor:nome,cnpj,uf:'',
-    destNome:'',destCNPJ:'',numero:'',serie:'',natOp:'Venda ao consumidor',chave:'',dataEmissao,dataSaida,
-    valorNota,valorProd:valorNota,desconto:0,frete:0,icms:0,pis:0,cofins:0,itens:[],pags:[],textoExtraido:texto.slice(0,2000)};
+  if (!nome) nome = file.name.replace('.pdf','');
+
+  // Datas
+  const datas = [];
+  for (const m of texto.matchAll(/\b(\d{2}\/\d{2}\/\d{4}|\d{4}-\d{2}-\d{2})\b/g)) {
+    try {
+      const [d,mo,a] = m[1].includes('/') ? m[1].split('/') : m[1].split('-').reverse();
+      datas.push(`${a.length===4?a:'20'+a}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`);
+    } catch{}
+  }
+  const dataEmissao = datas[0] || new Date().toISOString().slice(0,10);
+  const dataSaida   = datas[1] || dataEmissao;
+
+  // Valor total — busca "Valor a pagar", "Valor total" ou "Total"
+  let valorNota = 0;
+  let desconto  = 0;
+  for (const pat of [
+    /valor\s*a\s*pagar\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i,
+    /valor\s*total\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i,
+    /^total\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i,
+  ]) {
+    const m = rFirst(pat);
+    if (m) { valorNota = parseFloat(m[1].replace(/\./g,'').replace(',','.')); break; }
+  }
+  // Desconto
+  const mDesc = rFirst(/desconto\s*R?\$?\s*([\d\.]+[,\.]\d{2})/i);
+  if (mDesc) desconto = parseFloat(mDesc[1].replace(/\./g,'').replace(',','.'));
+
+  // Número e série — ex: "Nº 41779 Série 2 Via Consumidor"
+  let numero='', serie='';
+  const mNum = rFirst(/N[º°ª\u00ba\u00aa]?\s*(\d+)\s+S[eé]rie\s*(\d+)/i)
+            || rFirst(/N[uú]mero\s*[:\-]?\s*(\d+).*S[eé]rie\s*[:\-]?\s*(\d+)/i)
+            || rFirst(/(\d{3,})\s+S[eé]rie\s*(\d+)/i);
+  if (mNum) { numero=mNum[1]; serie=mNum[2]; }
+
+  // Chave de acesso — sequência de 44 dígitos
+  let chave='';
+  const mChave = texto.match(/\b(\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4})\b/) ||
+                 texto.match(/\b(\d{44})\b/);
+  if (mChave) chave = mChave[1].replace(/\s/g,'');
+
+  // Itens — linhas com padrão: código descrição qtd R$ valor_unit R$ valor_total
+  const itens = [];
+  for (const l of linhas) {
+    // padrão: (código) descrição ... qtd ... R$ X,XX ... R$ Y,YY
+    const m = l.match(/^(\d{4,})\s+(.+?)\s+(\d+)\s+R\$\s*([\d\.]+,\d{2})\s+R\$\s*([\d\.]+,\d{2})/i);
+    if (m) {
+      itens.push({
+        codigo: m[1],
+        descricao: m[2].trim(),
+        ncm:'', cfop:'',
+        unidade: 'UN',
+        quantidade: parseFloat(m[3]),
+        valorUnitario: parseFloat(m[4].replace(/\./g,'').replace(',','.')),
+        valorTotal: parseFloat(m[5].replace(/\./g,'').replace(',','.')),
+        desconto: 0,
+      });
+      continue;
+    }
+    // padrão alternativo sem código: descrição qtd x R$ valor_unit = R$ valor_total
+    const m2 = l.match(/^(.+?)\s+(\d+)\s*[xX]\s*R\$\s*([\d\.]+,\d{2})\s*=?\s*R\$\s*([\d\.]+,\d{2})/i);
+    if (m2) {
+      itens.push({
+        codigo:'', descricao:m2[1].trim(), ncm:'', cfop:'', unidade:'UN',
+        quantidade: parseFloat(m2[2]),
+        valorUnitario: parseFloat(m2[3].replace(/\./g,'').replace(',','.')),
+        valorTotal: parseFloat(m2[4].replace(/\./g,'').replace(',','.')),
+        desconto:0,
+      });
+    }
+  }
+
+  return {
+    id: crypto.randomUUID(), tipo:'Cupom', fonte:'PDF', arquivo:file.name,
+    emissor:nome, cnpj, uf:'',
+    destNome:'', destCNPJ:'',
+    numero, serie, natOp:'Venda ao consumidor', chave,
+    dataEmissao, dataSaida,
+    valorNota, valorProd:valorNota, desconto, frete:0, icms:0, pis:0, cofins:0,
+    itens, pags:[], textoExtraido: texto.slice(0,3000),
+  };
 }
 
 function setDateMode(v,btn){dateMode=v;document.querySelectorAll('#p-docs .seg-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderDocs();}
@@ -597,13 +699,55 @@ function getFilteredDocs(){
   });
 }
 
+function consultaURL(d) {
+  // NFC-e por UF — monta URL do portal da Fazenda estadual com a chave
+  if (!d.chave || d.chave.length !== 44) return '';
+  const uf = d.uf || (d.cnpj ? '' : '');
+  // Detecta UF pela chave (posições 0-1 = cUF)
+  const cUF = d.chave.slice(0,2);
+  const portais = {
+    '35':'https://www.nfce.fazenda.sp.gov.br/consulta',
+    '33':'http://www.nfce.fazenda.rj.gov.br/consulta',
+    '41':'https://www.nfce.fazenda.pr.gov.br/nfce/consulta',
+    '43':'https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx',
+    '31':'https://nfce.fazenda.mg.gov.br/portalnfce',
+    '29':'https://www.sefaz.ba.gov.br/nfce/consulta',
+    '23':'http://www.sefaz.ce.gov.br/Content/aplicacao/nfce/consulta',
+    '53':'https://www.sefaz.df.gov.br/nfce/consulta',
+    '52':'https://www.nfce.go.gov.br/post/ver_nfce_consulta_identificada.aspx',
+    '21':'https://sistemas.sefaz.ma.gov.br/nfceweb/consulta',
+    '50':'https://www.dfe.ms.gov.br/nfce/consulta',
+    '51':'https://www.sefaz.mt.gov.br/nfce/consulta',
+    '15':'https://app.sefa.pa.gov.br/nfce/consulta',
+    '25':'https://www.nfce.fazenda.pb.gov.br/consulta',
+    '26':'https://nfce.sefaz.pe.gov.br/nfce-web/consulta',
+    '22':'https://www.sefaz.pi.gov.br/nfce/consulta',
+    '24':'https://nfce.set.rn.gov.br/portalDFE/NFCe/consulta',
+    '11':'https://www.nfce.sefin.ro.gov.br/consulta',
+    '14':'https://www.sefaz.rr.gov.br/nfce/consulta',
+    '42':'https://www.sef.sc.gov.br/nfce/consulta',
+    '28':'https://www.nfce.se.gov.br/consulta',
+    '17':'https://www.sefaz.to.gov.br/nfce/consulta',
+    '13':'https://sistemas.sefaz.am.gov.br/nfceweb/consulta',
+    '16':'https://www.sefaz.ap.gov.br/nfce/consulta',
+    '12':'https://www.sefaznet.ac.gov.br/nfce/consulta',
+    '27':'https://www.nfce.sefaz.al.gov.br/consulta',
+  };
+  const base = portais[cUF] || 'https://www.nfce.fazenda.sp.gov.br/consulta';
+  return `${base}?chNFe=${d.chave}`;
+}
+
 function renderDocs(){
   const filtered=getFilteredDocs();
   const body=document.getElementById('docs-body');
-  if(!filtered.length){body.innerHTML='<tr class="empty-row"><td colspan="8">Nenhum documento encontrado.</td></tr>';return;}
+  if(!filtered.length){body.innerHTML='<tr class="empty-row"><td colspan="9">Nenhum documento encontrado.</td></tr>';return;}
   body.innerHTML=filtered.map(d=>{
     const bc=d.fonte==='PDF'?'b-pdf':d.tipo==='NFC-e'?'b-nfce':'b-nfe';
     const d2=d.dataSaida&&d.dataSaida!==d.dataEmissao;
+    const url=consultaURL(d);
+    const linkCell=url
+      ? `<td><a href="${url}" target="_blank" style="font-size:12px;color:var(--blue-d);text-decoration:none;font-weight:600;white-space:nowrap;" title="Consultar no portal da Fazenda">🔗 consultar</a></td>`
+      : `<td style="color:var(--light);font-size:12px;">—</td>`;
     return `<tr>
       <td><span class="badge ${bc}">${d.tipo}</span></td>
       <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.emissor||'—'}</td>
@@ -612,6 +756,7 @@ function renderDocs(){
       <td><div class="two-d"><span class="d1">${fmtD(d.dataEmissao)}</span>${d2?`<span class="d2">↳ saída: ${fmtD(d.dataSaida)}</span>`:''}</div></td>
       <td class="tr mono" style="font-weight:600;color:var(--blue-d)">${brl(d.valorNota)}</td>
       <td style="font-size:11px;color:var(--light);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.arquivo}</td>
+      ${linkCell}
       <td><button class="btn sm" onclick="openPanel('${d.id}')">ver</button></td>
     </tr>`;
   }).join('');
@@ -663,7 +808,8 @@ function openPanel(id){
       </tr>`).join('')}</tbody></table></div>`:''}
     ${d.pags.length?`<div class="psec"><div class="psec-title">Pagamentos</div>
       ${d.pags.map(p=>`<div class="t-row"><span>${p.tipo}</span><span>${brl(p.valor)}</span></div>`).join('')}</div>`:''}
-    ${d.chave?`<div class="psec"><div class="psec-title">Chave de Acesso</div><div class="chave">${d.chave}</div></div>`:''}
+    ${d.chave?`<div class="psec"><div class="psec-title">Chave de Acesso</div><div class="chave">${d.chave}</div>
+      ${consultaURL(d)?`<a href="${consultaURL(d)}" target="_blank" style="display:inline-block;margin-top:10px;font-size:13px;color:var(--blue-d);font-weight:600;text-decoration:none;">🔗 Consultar no portal da Fazenda</a>`:''}</div>`:''}
     ${d.textoExtraido?`<div class="psec"><div class="psec-title">Texto extraído do PDF</div>
       <div class="chave" style="max-height:120px;overflow-y:auto">${d.textoExtraido}</div></div>`:''}
   `;
@@ -734,29 +880,43 @@ function exportXLSX(){
   const ds=getFilteredDocs();
   if(!ds.length){toast('Nenhum documento para exportar','err');return;}
   const wb=XLSX.utils.book_new();
-  const rows1=[['Tipo','Fonte','Arquivo','Nº','Série','Chave Acesso','Emissor','CNPJ Emissor','UF','Destinatário','CNPJ/CPF Dest.','Natureza Op.','Data Emissão','Data Saída/Entrada','Valor Produtos','Desconto','Frete','ICMS','PIS','COFINS','Valor Nota']];
-  ds.forEach(d=>rows1.push([d.tipo,d.fonte,d.arquivo,d.numero,d.serie,d.chave,d.emissor,d.cnpj,d.uf,d.destNome,d.destCNPJ,d.natOp,d.dataEmissao,d.dataSaida,d.valorProd,d.desconto,d.frete,d.icms,d.pis,d.cofins,d.valorNota]));
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows1),'Notas Fiscais');
-  const rows2=[['Arquivo','Emissor','Data Emissão','Data Saída/Entrada','Código','Descrição','NCM','CFOP','Unidade','Quantidade','Valor Unit.','Desconto','Valor Total']];
-  ds.forEach(d=>d.itens.forEach(i=>rows2.push([d.arquivo,d.emissor,d.dataEmissao,d.dataSaida,i.codigo,i.descricao,i.ncm,i.cfop,i.unidade,i.quantidade,i.valorUnitario,i.desconto,i.valorTotal])));
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows2),'Itens');
-  const em={};
-  ds.forEach(d=>{const k=d.cnpj||d.emissor;em[k]=em[k]||{nome:d.emissor,cnpj:d.cnpj,qtd:0,total:0};em[k].qtd++;em[k].total+=d.valorNota;});
-  const rows3=[['Emissor','CNPJ','Qtd Documentos','Valor Total','Valor Médio']];
-  Object.values(em).sort((a,b)=>b.total-a.total).forEach(v=>rows3.push([v.nome,v.cnpj,v.qtd,r2(v.total),r2(v.total/v.qtd)]));
-  XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows3),'Por Emissor');
+
+  const header=['Tipo','Emissor','CNPJ','Nº','Série','Data Emissão','Data Saída/Entrada','Valor Nota','Desconto','Frete','ICMS',
+    'Cód. Produto','Descrição Produto','NCM','CFOP','Unidade','Quantidade','Valor Unit.','Valor Total Item','Link Consulta','Arquivo'];
+  const rows=[header];
+
+  ds.forEach(d=>{
+    const url=consultaURL(d)||'';
+    if(d.itens.length===0){
+      rows.push([d.tipo,d.emissor,d.cnpj,d.numero,d.serie,d.dataEmissao,d.dataSaida,
+        d.valorNota,d.desconto,d.frete,d.icms,
+        '','','','','','','','',url,d.arquivo]);
+    } else {
+      d.itens.forEach(i=>{
+        rows.push([d.tipo,d.emissor,d.cnpj,d.numero,d.serie,d.dataEmissao,d.dataSaida,
+          d.valorNota,d.desconto,d.frete,d.icms,
+          i.codigo,i.descricao,i.ncm,i.cfop,i.unidade,i.quantidade,i.valorUnitario,i.valorTotal,
+          url,d.arquivo]);
+      });
+    }
+  });
+
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:8},{wch:30},{wch:18},{wch:8},{wch:6},{wch:14},{wch:18},{wch:13},{wch:10},{wch:10},{wch:10},
+    {wch:12},{wch:30},{wch:10},{wch:8},{wch:8},{wch:10},{wch:13},{wch:14},{wch:60},{wch:35}];
+
+  // Formata coluna "Link Consulta" (índice 19) como hiperlink clicável
+  const linkCol=19;
+  rows.slice(1).forEach((row,ri)=>{
+    const url=row[linkCol];
+    if(!url) return;
+    const cellRef=XLSX.utils.encode_cell({r:ri+1,c:linkCol});
+    ws[cellRef]={v:url,t:'s',l:{Target:url,Tooltip:'Consultar no portal da Fazenda'}};
+  });
+
+  XLSX.utils.book_append_sheet(wb,ws,'Notas Fiscais');
   XLSX.writeFile(wb,`notas_fiscais_${new Date().toISOString().slice(0,10)}.xlsx`);
   toast('Excel gerado!','ok');
-}
-
-function exportCSV(){
-  const ds=getFilteredDocs();
-  if(!ds.length){toast('Nenhum documento para exportar','err');return;}
-  const lines=['Tipo;Fonte;Arquivo;Número;Emissor;CNPJ;Data Emissão;Data Saída/Entrada;Valor Produtos;Desconto;Frete;ICMS;Valor Nota'];
-  ds.forEach(d=>lines.push([d.tipo,d.fonte,d.arquivo,d.numero,d.emissor,d.cnpj,d.dataEmissao,d.dataSaida,d.valorProd,d.desconto,d.frete,d.icms,d.valorNota].map(v=>'"'+String(v??'').replace(/"/g,'""')+'"').join(';')));
-  const blob=new Blob(['\uFEFF'+lines.join('\n')],{type:'text/csv;charset=utf-8'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='notas_fiscais.csv';a.click();
-  toast('CSV gerado!','ok');
 }
 
 function brl(v){if(!v&&v!==0)return'—';return'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});}
