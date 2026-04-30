@@ -706,87 +706,69 @@ async function parsePDF(file) {
 
     const isLixo = s => /nacional|estadual|municipal|importado|leitorfiscal|https?:|consulte|protocolo|via\s+con|autoriza|^cep|danfe|documento\s+aux/i.test(s);
 
-    // Parser final — baseado nos padrões exatos do debug:
-    //
-    // Padrão A (item numa linha): [xCod:cod] [xDesc:desc] [xQtd:qtd] [xUnit:val] [xTotal:val]
-    // Padrão B (desc quebrada):   linha acima + [xDesc:desc_cont] na linha seguinte
-    // Padrão C (desc antes cod):  [xDesc:desc] sozinha, depois [xCod:cod] [xQtd:qtd] [valores]
-    // Padrão D (sufixo código):   [xCod:sufixo_num] sozinho (sem desc, sem valores) → ignorar
-    // Padrão E (valores separados): [xQtd:qtd] [valores] sem código (fecha item aberto)
-    //
-    // Pré-processamento: classifica cada linha
-
-    const classifica = (linha) => {
-      const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
-      linha.tokens.forEach(t => { if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str); });
-      const cod   = cols.cod.join('').trim();
-      const desc  = cols.desc.join(' ').trim();
-      const tot   = extraiVal(cols.total);
-      const unit  = extraiVal(cols.unit);
-      const qtd   = extraiQtd(cols.qtd);
-      const numCod = /^\d+$/.test(cod);
-      return { cod, desc, tot, unit, qtd, numCod,
-        temCod: numCod && cod.length > 0,
-        temVal: tot > 0,
-        temQtd: qtd > 0,
-        soDesc: !numCod && desc.length > 0 && tot === 0 && qtd === 0,
-        sufixo: numCod && desc.length === 0 && tot === 0 && qtd === 0,
-      };
-    };
-
+    // Classifica cada linha da seção de itens
     const linhasInfo = secao
       .filter(l => l.texto && !isLixo(l.texto))
-      .map(l => ({ ...classifica(l), y: l.y }));
+      .map(l => {
+        const cols = { cod:[], desc:[], qtd:[], unit:[], total:[] };
+        l.tokens.forEach(t => { if (!isLixo(t.str)) cols[colDe(t.x)].push(t.str); });
+        const cod  = cols.cod.join('').trim();
+        const desc = cols.desc.join(' ').trim();
+        const tot  = extraiVal(cols.total);
+        const unit = extraiVal(cols.unit);
+        const qtd  = extraiQtd(cols.qtd);
+        return {
+          y: l.y, cod, desc, tot, unit, qtd,
+          sufixo: /^\d+$/.test(cod) && !desc && tot===0 && qtd===0,
+        };
+      });
+    // Linhas consecutivas com espaçamento pequeno (≤10px) são do mesmo item.
+    // Linhas com espaçamento maior iniciam novo item.
+    // Esta abordagem independe de heurísticas de código ou descrição.
 
-    const blocos = [];
-    let bAtual = null;
+    // Agrupa linhas em blocos por proximidade Y
+    const grupos = [];
+    let gAtual = [];
 
     for (let i = 0; i < linhasInfo.length; i++) {
       const l = linhasInfo[i];
-
-      // Ignora sufixos de código numérico sem desc e sem valores
-      if (l.sufixo) continue;
-
-      if (l.temVal && l.temQtd) {
-        if (l.temCod) {
-          // Item completo ou início+valores na mesma linha
-          if (bAtual) blocos.push(bAtual);
-          bAtual = { cod:l.cod, desc:l.desc, qtd:l.qtd, unit:l.unit, tot:l.tot };
-          blocos.push(bAtual); bAtual = null;
+      if (l.sufixo && !l.desc) {
+        // sufixo puro (só número, sem desc) — adiciona ao grupo atual se houver
+        if (gAtual.length > 0) gAtual.push(l);
+        continue;
+      }
+      if (gAtual.length === 0) {
+        gAtual.push(l);
+      } else {
+        const prev = gAtual[gAtual.length - 1];
+        const dy = l.y - prev.y;
+        if (dy <= 10) {
+          // Próxima do anterior — mesmo grupo
+          gAtual.push(l);
         } else {
-          // Só valores — fecha item aberto
-          if (bAtual && bAtual.tot === 0) {
-            if (l.desc) bAtual.desc += (bAtual.desc?' ':'')+l.desc;
-            bAtual.qtd=l.qtd; bAtual.unit=l.unit; bAtual.tot=l.tot;
-            blocos.push(bAtual); bAtual = null;
-          }
-        }
-      } else if (l.temCod && !l.temVal) {
-        // Código sem valores — início de item
-        // Verifica se linha anterior (só desc) pertence a este item
-        if (bAtual) blocos.push(bAtual);
-        bAtual = { cod:l.cod, desc:l.desc, qtd:l.qtd||0, unit:l.unit||0, tot:0 };
-      } else if (l.soDesc) {
-        // Só descrição — pertence ao item aberto atual
-        if (bAtual) {
-          bAtual.desc += (bAtual.desc?' ':'')+l.desc;
-        } else {
-          // Não há item aberto — pode ser desc que precede um código
-          // Guarda temporariamente e associa ao próximo item
-          if (bAtual === null) {
-            bAtual = { cod:'', desc:l.desc, qtd:0, unit:0, tot:0, pendente:true };
-          }
+          // Longe — novo grupo
+          grupos.push(gAtual);
+          gAtual = [l];
         }
       }
     }
-    if (bAtual && bAtual.tot > 0) blocos.push(bAtual);
+    if (gAtual.length > 0) grupos.push(gAtual);
 
-    for (const b of blocos) {
-      if (b.tot > 0 && b.qtd > 0) {
+    // Converte cada grupo em item
+    for (const grupo of grupos) {
+      let cod='', desc='', qtd=0, unit=0, tot=0;
+      for (const l of grupo) {
+        if (l.cod) cod += l.cod;
+        if (l.desc) desc += (desc?' ':'')+l.desc;
+        if (l.qtd && !qtd) qtd = l.qtd;
+        if (l.unit && !unit) unit = l.unit;
+        if (l.tot && !tot) tot = l.tot;
+      }
+      if (tot > 0 && qtd > 0) {
         itens.push({
-          codigo:b.cod, descricao:b.desc.trim(),
+          codigo: cod, descricao: desc.trim(),
           ncm:'', cfop:'', unidade:'UN',
-          quantidade:b.qtd, valorUnitario:b.unit, valorTotal:b.tot, desconto:0,
+          quantidade: qtd, valorUnitario: unit, valorTotal: tot, desconto: 0,
         });
       }
     }
