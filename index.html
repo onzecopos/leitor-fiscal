@@ -659,11 +659,22 @@ async function parsePDF(file) {
   if(mNum){numero=mNum[1];serie=mNum[2];}
 
   // ── Itens ─────────────────────────────────────────────────────────────────────
-  // Estratégia: usa X para separar colunas numéricas (direita) do texto (esquerda)
-  // Detecta xMin (colunas de valor) como o X mínimo dos tokens "R$" na seção de itens
-  const idxH = linhas.findIndex(l=>/Código/i.test(l.texto)&&/Descrição/i.test(l.texto));
+  const idxH = linhas.findIndex(l=>
+    (/Código/i.test(l.texto)||/Descri/i.test(l.texto)) &&
+    (/Qtd/i.test(l.texto)||/Valor/i.test(l.texto))
+  );
   const idxF = linhas.findIndex(l=>/Qtde\.?\s*total\s*de\s*itens/i.test(l.texto));
   const itens = [];
+
+  // DEBUG — mostra tokens ao redor do cabeçalho detectado
+  const logEl = document.getElementById('log');
+  if (logEl) {
+    logEl.style.display='block';
+    logEl.innerHTML += `<div style="color:#aaa">> [DEBUG] idxH=${idxH} idxF=${idxF} totalLinhas=${linhas.length}</div>`;
+    linhas.slice(Math.max(0,idxH>=0?idxH:0), Math.min((idxH>=0?idxH:0)+8, linhas.length)).forEach(l=>{
+      logEl.innerHTML += `<div style="color:#aaa;font-size:10px">Y${l.y}: ${l.tokens.map(t=>`[x${t.x}:"${t.str}"]`).join(' ')}</div>`;
+    });
+  }
 
   if (idxH >= 0) {
     const fim = idxF>=0 ? idxF : linhas.length;
