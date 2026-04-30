@@ -719,6 +719,9 @@ async function parsePDF(file) {
         const qtd  = extraiQtd(cols.qtd);
         return {
           y: l.y, cod, desc, tot, unit, qtd,
+          temCod: /^\d+$/.test(cod) && cod.length > 0,
+          temVal: tot > 0,
+          temQtd: qtd > 0,
           sufixo: /^\d+$/.test(cod) && !desc && tot===0 && qtd===0,
         };
       });
@@ -726,66 +729,48 @@ async function parsePDF(file) {
     // Linhas com espaçamento maior iniciam novo item.
     // Esta abordagem independe de heurísticas de código ou descrição.
 
-    // Calcula espaçamento dinâmico: diferença Y entre as primeiras linhas de itens
-    // Linhas do mesmo item têm dy pequeno; itens diferentes têm dy maior
-    // Usa a mediana dos dy pequenos como threshold
-    const dys = [];
-    for (let i = 1; i < linhasInfo.length; i++) {
-      const dy = linhasInfo[i].y - linhasInfo[i-1].y;
-      if (dy > 0 && dy < 20) dys.push(dy);
-    }
-    dys.sort((a,b)=>a-b);
-    // Threshold = valor entre o menor dy (mesma linha) e o maior dy (item diferente)
-    const dyMin = dys[0] || 4;
-    const dyMax = dys[dys.length-1] || 16;
-    const dyThreshold = Math.round(dyMin + (dyMax - dyMin) * 0.45);
+    // Regra final baseada no debug:
+    // 1. Linha com CÓDIGO + VALORES na mesma linha = item completo (fecha qualquer anterior)
+    // 2. Linha com CÓDIGO sem valores = início de item (aguarda valores)
+    // 3. Linha com VALORES sem código = fecha item aberto
+    // 4. Linha só com DESC = acumula no item aberto
+    // 5. Linha só com número em xCod (sufixo) = ignorar
 
-    // Agrupa linhas em blocos por proximidade Y
-    const grupos = [];
-    let gAtual = [];
+    let item = null;
+    for (const l of linhasInfo) {
+      const completo = l.temCod && l.temVal && l.temQtd;
+      const inicio   = l.temCod && !l.temVal;
+      const valores  = !l.temCod && l.temVal && l.temQtd;
+      const soDesc   = !l.temCod && !l.temVal && l.desc;
+      const sufixo   = l.sufixo;
 
-    for (let i = 0; i < linhasInfo.length; i++) {
-      const l = linhasInfo[i];
-      if (l.sufixo && !l.desc) {
-        // sufixo puro (só número, sem desc) — adiciona ao grupo atual se houver
-        if (gAtual.length > 0) gAtual.push(l);
-        continue;
-      }
-      if (gAtual.length === 0) {
-        gAtual.push(l);
-      } else {
-        const prev = gAtual[gAtual.length - 1];
-        const dy = l.y - prev.y;
-        if (dy <= dyThreshold) {
-          // Próxima do anterior — mesmo grupo
-          gAtual.push(l);
-        } else {
-          // Longe — novo grupo
-          grupos.push(gAtual);
-          gAtual = [l];
-        }
-      }
-    }
-    if (gAtual.length > 0) grupos.push(gAtual);
+      if (sufixo) continue;
 
-    // Converte cada grupo em item
-    for (const grupo of grupos) {
-      let cod='', desc='', qtd=0, unit=0, tot=0;
-      for (const l of grupo) {
-        if (l.cod) cod += l.cod;
-        if (l.desc) desc += (desc?' ':'')+l.desc;
-        if (l.qtd && !qtd) qtd = l.qtd;
-        if (l.unit && !unit) unit = l.unit;
-        if (l.tot && !tot) tot = l.tot;
-      }
-      if (tot > 0 && qtd > 0) {
+      if (completo) {
+        if (item) itens.push(item);
         itens.push({
-          codigo: cod, descricao: desc.trim(),
+          codigo:l.cod, descricao:l.desc.trim(),
           ncm:'', cfop:'', unidade:'UN',
-          quantidade: qtd, valorUnitario: unit, valorTotal: tot, desconto: 0,
+          quantidade:l.qtd, valorUnitario:l.unit, valorTotal:l.tot, desconto:0,
         });
+        item = null;
+      } else if (inicio) {
+        if (item) itens.push(item);
+        item = { codigo:l.cod, descricao:l.desc, qtd:l.qtd||0, unit:l.unit||0, tot:0 };
+      } else if (valores) {
+        if (item) {
+          if (l.desc) item.descricao += (item.descricao?' ':'')+l.desc;
+          item.qtd=l.qtd; item.unit=l.unit; item.tot=l.tot;
+          itens.push(item); item=null;
+        }
+      } else if (soDesc) {
+        if (item) {
+          item.descricao += (item.descricao?' ':'')+l.desc;
+        }
+        // Se não tem item aberto, desc orphan — ignora
       }
     }
+    if (item && item.tot > 0) itens.push(item);
   }
 
   return {
