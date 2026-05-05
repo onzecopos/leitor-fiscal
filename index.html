@@ -386,6 +386,7 @@ tbody tr:hover td{background:var(--blue-ll);}
         <button class="btn primary" onclick="renderDocs()">Filtrar</button>
         <button class="btn" onclick="clearF()">Limpar</button>
         <button class="btn" style="margin-left:auto" onclick="exportXLSX()">⬇ Excel</button>
+        <button class="btn" style="color:var(--rose-d);border-color:var(--rose-d);" onclick="limparDocs()">🗑 Apagar tudo</button>
       </div>
       <div class="table-wrap">
         <table>
@@ -985,6 +986,17 @@ function renderDocs(){
       </td>
     </tr>`;
   }).join('');
+}
+
+function limparDocs() {
+  if (!docs.length) { toast('Nenhum documento para apagar', 'err'); return; }
+  if (!confirm(`Apagar todos os ${docs.length} documento(s) importados nesta sessão?`)) return;
+  docs = [];
+  document.getElementById('doc-count').textContent = '0 documentos';
+  document.getElementById('log').style.display = 'none';
+  document.getElementById('log').innerHTML = '';
+  renderDocs();
+  toast('Todos os documentos foram apagados', 'ok');
 }
 
 function clearF(){['fi','ff','f-q'].forEach(id=>document.getElementById(id).value='');document.getElementById('f-tipo').value='';renderDocs();}
