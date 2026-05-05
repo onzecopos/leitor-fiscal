@@ -1162,51 +1162,51 @@ function extrairItensTexto() {
   const d = docs.find(x=>x.id===detalharDocId);
   if (!d) return;
 
-  // Parser do formato da Fazenda RJ:
-  // "DESCRICAO (Código: XXXX ) VI. Total"
-  // "Qtde.:1  UN: UN  VI. Unit.: 0,01  0,01"
+  // Formato real da Fazenda RJ:
+  // "DESCRICAO (Código: XXXX )"
+  // "Qtde.:1  UN: UN  Vl. Unit.:   0,01 \t Vl. Total"
+  // "0,01"
   const itens = [];
   const linhas = texto.split(/[\n\r]+/).map(l=>l.trim()).filter(Boolean);
 
-  let i = 0;
-  while (i < linhas.length) {
+  for (let i = 0; i < linhas.length; i++) {
     const l = linhas[i];
+    const mProd = l.match(/^(.+?)\s*\(Código:\s*(\d+)\s*\)/i);
+    if (!mProd) continue;
 
-    // Linha de produto: tem "(Código:" e "VI. Total"
-    const mProd = l.match(/^(.+?)\s*\(Código:\s*(\d+)\s*\).*VI\.\s*Total/i);
-    if (mProd) {
-      const descricao = mProd[1].trim();
-      const codigo    = mProd[2].trim();
+    const descricao = mProd[1].trim();
+    const codigo    = mProd[2].trim();
+    let quantidade=1, valorUnitario=0, valorTotal=0;
 
-      // Próxima linha: Qtde.:X  UN: UN  VI. Unit.: X,XX  X,XX
-      let quantidade=1, valorUnitario=0, valorTotal=0;
-      if (i+1 < linhas.length) {
-        const lq = linhas[i+1];
-        const mQ = lq.match(/Qtde?\.\s*[:\-]?\s*([\d,\.]+)/i);
-        const mU = lq.match(/VI\.\s*Unit\.\s*[:\-]?\s*([\d,\.]+)/i);
-        const mT = lq.match(/([\d\.]+,\d{2})\s*$/);
+    for (let j = i+1; j <= i+4 && j < linhas.length; j++) {
+      const lq = linhas[j];
+      if (/Qtde?\./i.test(lq)) {
+        const mQ = lq.match(/Qtde?\.\s*:?\s*([\d,\.]+)/i);
+        const mU = lq.match(/Vl?\.\s*Unit\.\s*:?\s*([\d,\.]+)/i);
         if (mQ) quantidade    = parseFloat(mQ[1].replace(',','.'));
         if (mU) valorUnitario = parseFloat(mU[1].replace(',','.'));
-        if (mT) valorTotal    = parseFloat(mT[1].replace('.','').replace(',','.'));
-        i += 2;
-      } else { i++; }
-
-      if (valorTotal > 0 || valorUnitario > 0) {
-        if (!valorTotal && valorUnitario) valorTotal = quantidade * valorUnitario;
-        itens.push({ codigo, descricao, ncm:'', cfop:'', unidade:'UN', quantidade, valorUnitario, valorTotal, desconto:0 });
+        const mTmesma = lq.match(/Vl?\.\s*Total\s+([\d,\.]+)/i);
+        if (mTmesma) {
+          valorTotal = parseFloat(mTmesma[1].replace(',','.'));
+        } else if (j+1 < linhas.length) {
+          const prox = linhas[j+1].trim();
+          if (/^[\d,\.]+$/.test(prox)) valorTotal = parseFloat(prox.replace(',','.'));
+        }
+        break;
       }
-      continue;
     }
-    i++;
+
+    if (!valorTotal && valorUnitario) valorTotal = Math.round(quantidade * valorUnitario * 100) / 100;
+    if (valorTotal > 0 || valorUnitario > 0) {
+      itens.push({ codigo, descricao, ncm:'', cfop:'', unidade:'UN', quantidade, valorUnitario, valorTotal, desconto:0 });
+    }
   }
 
   if (!itens.length) {
-    // Tenta formato alternativo — busca padrões de valor no texto
     toast('Não foi possível extrair itens. Verifique se copiou o texto completo da Fazenda.', 'err');
     return;
   }
 
-  // Atualiza o documento com os itens extraídos
   d.itens = itens;
   const res = document.getElementById('detalhar-resultado');
   res.style.display = 'block';
@@ -1216,7 +1216,8 @@ function extrairItensTexto() {
       <table class="items-tbl" style="margin-top:10px;">
         <thead><tr><th>Código</th><th>Descrição</th><th>Qtd</th><th>Unit.</th><th>Total</th></tr></thead>
         <tbody>${itens.map(it=>`<tr>
-          <td>${it.codigo}</td><td>${it.descricao}</td>
+          <td class="mono">${it.codigo}</td>
+          <td>${it.descricao}</td>
           <td>${it.quantidade}</td>
           <td>${brl(it.valorUnitario)}</td>
           <td>${brl(it.valorTotal)}</td>
