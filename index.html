@@ -617,7 +617,7 @@ async function handleFiles(files, type) {
           }
           docs.push(doc);
         } catch(e) {
-          if (e.message === 'cancelamento') ignorados++;
+        if (e.message === 'cancelamento') { ignorados++; totalCancelamentosImportados++; }
           else erros++;
           if (xmlTasks.length <= 100) {
             if (e.message !== 'cancelamento') {
@@ -677,7 +677,8 @@ async function handleFiles(files, type) {
 
 // Chaves de cancelamento pendentes (nota ainda não importada)
 const cancelamentosPendentes = new Set();
-const cancelamentosOrfaos = []; // cancelamentos sem nota correspondente
+const cancelamentosOrfaos = [];
+let totalCancelamentosImportados = 0;
 
 function parseXML(txt, filename) {
   const xml = new DOMParser().parseFromString(txt, 'application/xml');
@@ -1116,6 +1117,21 @@ function changePage(p) {
 }
 
 
+function limparDocs() {
+  if (!docs.length) { toast('Nenhum documento para apagar', 'err'); return; }
+  if (!confirm(`Apagar todos os ${docs.length} documento(s) importados nesta sessão?`)) return;
+  docs = [];
+  totalCancelamentosImportados = 0;
+  cancelamentosOrfaos.length = 0;
+  cancelamentosPendentes.clear();
+  currentPage = 0;
+  document.getElementById('doc-count').textContent = '0 documentos';
+  document.getElementById('log').style.display = 'none';
+  document.getElementById('log').innerHTML = '';
+  renderDocs();
+  toast('Todos os documentos foram apagados', 'ok');
+}
+
 function clearF(){['fi','ff','f-q'].forEach(id=>document.getElementById(id).value='');document.getElementById('f-tipo').value='';renderDocs();}
 
 function openPanel(id){
@@ -1204,7 +1220,7 @@ function renderDash(){
   const dts=validas.map(d=>d.dataEmissao).filter(Boolean).sort();
   const period=dts.length>=2?`${fmtD(dts[0])} – ${fmtD(dts[dts.length-1])}`:dts.length===1?fmtD(dts[0]):'—';
 
-  const totalDocs = ds.length; // válidas + canceladas
+  const totalDocs = ds.length + totalCancelamentosImportados;
   document.getElementById('dash-stats').innerHTML=`
     <div class="stat"><div class="stat-label">Total bruto</div><div class="stat-val">${brl(totalBruto)}</div><div class="stat-sub">${totalDocs} notas (${validas.length} válidas · ${canceladas.length} canceladas)</div></div>
     <div class="stat" style="${canceladas.length?'border-color:var(--rose);background:var(--rose-l);':''}">
