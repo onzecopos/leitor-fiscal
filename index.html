@@ -180,13 +180,14 @@ input[type=date]:focus,select:focus,.f-search:focus{outline:none;border-color:va
 .btn.sm{padding:5px 10px;font-size:12px;}
 
 /* ── Table ── */
-.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;}
+.table-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);overflow:hidden;max-height:calc(100vh - 280px);overflow-y:auto;}
 table{width:100%;border-collapse:collapse;}
 thead th{
   background:var(--blue-ll);padding:10px 14px;text-align:left;
   font-size:10px;font-weight:700;color:var(--blue-text);
   text-transform:uppercase;letter-spacing:.06em;
   border-bottom:1px solid var(--border);white-space:nowrap;
+  position:sticky;top:0;z-index:2;
 }
 tbody td{padding:11px 14px;border-bottom:1px solid var(--border);font-size:13px;vertical-align:middle;}
 tbody tr:last-child td{border-bottom:none;}
@@ -402,6 +403,7 @@ tbody tr:hover td{background:var(--blue-ll);}
           <thead>
             <tr>
               <th>Tipo</th>
+              <th>Situação</th>
               <th>Emissor</th>
               <th>CNPJ</th>
               <th>Nº</th>
@@ -414,7 +416,7 @@ tbody tr:hover td{background:var(--blue-ll);}
             </tr>
           </thead>
           <tbody id="docs-body">
-            <tr class="empty-row"><td colspan="11">Nenhum documento importado ainda.</td></tr>
+            <tr class="empty-row"><td colspan="12">Nenhum documento importado ainda.</td></tr>
           </tbody>
         </table>
       </div>
@@ -1095,13 +1097,13 @@ function renderDocs(){
   const page=filtered.slice(start,start+PAGE_SIZE);
 
   if(!page.length){
-    body.innerHTML=`<tr class="empty-row"><td colspan="11">Nenhum documento encontrado.</td></tr>`;
+    body.innerHTML=`<tr class="empty-row"><td colspan="12">Nenhum documento encontrado.</td></tr>`;
     renderPagination(total,totalPages);
     return;
   }
   body.innerHTML=page.map(d=>{
     const bc=d.fonte==='PDF'?'b-pdf':d.tipo==='NFC-e'?'b-nfce':'b-nfe';
-    const cancelStyle = d.cancelada ? 'opacity:0.5;text-decoration:line-through;' : '';
+    const cancelStyle = d.cancelada ? 'opacity:0.55;' : '';
     const d2=d.dataSaida&&d.dataSaida!==d.dataEmissao;
     const url=consultaURL(d);
     const linkCell=url?`<td><a href="${url}" target="_blank" style="font-size:12px;color:var(--blue-d);text-decoration:none;font-weight:600;white-space:nowrap;">🔗 consultar</a></td>`:`<td style="color:var(--light);font-size:12px;">—</td>`;
@@ -1109,8 +1111,12 @@ function renderDocs(){
       <span class="mono" style="font-size:10px;color:var(--muted);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${d.chave}">${d.chave.slice(0,20)}…</span>
       <button class="btn sm" style="flex-shrink:0;padding:3px 8px;font-size:11px;" onclick="navigator.clipboard.writeText('${d.chave}').then(()=>toast('Chave copiada!','ok'))">📋</button>
     </div></td>`:`<td style="color:var(--light);font-size:12px;">—</td>`;
+    const situacao = d.cancelada
+      ? `<span class="badge" style="background:var(--rose-l);color:var(--rose-d);">✕ Cancelada</span>`
+      : `<span class="badge" style="background:var(--teal-l);color:var(--teal-d);">✓ Válida</span>`;
     return `<tr style="${cancelStyle}">
-      <td><span class="badge ${bc}">${d.tipo}</span>${d.cancelada?` <span class="badge" style="background:var(--rose-l);color:var(--rose-d);margin-left:3px;">✕ cancelada</span>`:''}</td>
+      <td><span class="badge ${bc}">${d.tipo}</span></td>
+      <td>${situacao}</td>
       <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.emissor||'—'}</td>
       <td class="mono">${fmtCNPJ(d.cnpj)}</td>
       <td class="mono" style="color:var(--muted)">${d.numero||'—'}</td>
@@ -1328,21 +1334,21 @@ function exportXLSX(){
     try {
       const wb = XLSX.utils.book_new();
 
-      const header = ['Tipo','Emissor','CNPJ','Nº','Série','Data Emissão','Data Saída/Entrada',
+      const header = ['Tipo','Situação','Emissor','CNPJ','Nº','Série','Data Emissão','Data Saída/Entrada',
         'Valor Nota','Desconto','Cód. Produto','Descrição Produto','Unidade',
         'Quantidade','Valor Unit.','Valor Total Item','Chave de Acesso','Link Consulta','Arquivo'];
 
-      // Monta rows diretamente sem objetos intermediários
       const rows = [header];
       for (const d of ds) {
         const url = consultaURL(d) || '';
+        const situacao = d.cancelada ? 'Cancelada' : 'Válida';
         if (d.itens.length === 0) {
-          rows.push([d.tipo,d.emissor,d.cnpj,d.numero,d.serie,
+          rows.push([d.tipo,situacao,d.emissor,d.cnpj,d.numero,d.serie,
             d.dataEmissao,d.dataSaida,d.valorNota,d.desconto,
             '','','','','','',d.chave,url,d.arquivo]);
         } else {
           for (const i of d.itens) {
-            rows.push([d.tipo,d.emissor,d.cnpj,d.numero,d.serie,
+            rows.push([d.tipo,situacao,d.emissor,d.cnpj,d.numero,d.serie,
               d.dataEmissao,d.dataSaida,d.valorNota,d.desconto,
               i.codigo,i.descricao,i.unidade,i.quantidade,i.valorUnitario,i.valorTotal,
               d.chave,url,d.arquivo]);
@@ -1351,15 +1357,15 @@ function exportXLSX(){
       }
 
       const ws = XLSX.utils.aoa_to_sheet(rows);
-      ws['!cols']=[{wch:8},{wch:30},{wch:18},{wch:8},{wch:6},{wch:14},{wch:18},
+      ws['!cols']=[{wch:8},{wch:10},{wch:30},{wch:18},{wch:8},{wch:6},{wch:14},{wch:18},
         {wch:13},{wch:10},{wch:12},{wch:30},{wch:8},{wch:10},{wch:13},{wch:14},
         {wch:44},{wch:60},{wch:35}];
 
-      // Link consulta como hiperlink (coluna índice 16)
+      // Link consulta como hiperlink (coluna índice 17)
       for (let ri = 1; ri < rows.length; ri++) {
-        const url = rows[ri][16];
+        const url = rows[ri][17];
         if (!url) continue;
-        const ref = XLSX.utils.encode_cell({r:ri, c:16});
+        const ref = XLSX.utils.encode_cell({r:ri, c:17});
         ws[ref] = {v:url, t:'s', l:{Target:url, Tooltip:'Consultar no portal da Fazenda'}};
       }
 
