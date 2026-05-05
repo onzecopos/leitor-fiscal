@@ -463,6 +463,48 @@ tbody tr:hover td{background:var(--blue-ll);}
   </div>
 </div>
 
+<!-- Modal Detalhar Itens PDF -->
+<div class="overlay" id="modal-detalhar" onclick="maybeCloseDetalhar(event)" style="display:none;">
+  <div class="panel" style="width:560px;">
+    <div class="panel-head">
+      <div>
+        <div class="panel-h1">Detalhar itens da nota</div>
+        <div class="panel-h2" id="detalhar-sub">—</div>
+      </div>
+      <button class="close" onclick="closeDetalhar()">×</button>
+    </div>
+    <div class="panel-body">
+      <div style="background:var(--blue-l);border-radius:var(--r-sm);padding:14px;margin-bottom:18px;font-size:13px;line-height:1.8;border:1px solid var(--border2);">
+        <strong style="display:block;margin-bottom:6px;color:var(--blue-d);">Como fazer:</strong>
+        <span style="color:var(--blue-text);">
+          1. Clique em <strong>"Abrir portal da Fazenda"</strong> abaixo<br>
+          2. A nota abre automaticamente no portal<br>
+          3. Na página da Fazenda, selecione tudo (<strong>Ctrl+A</strong>) e copie (<strong>Ctrl+C</strong>)<br>
+          4. Volte aqui e cole o texto no campo abaixo (<strong>Ctrl+V</strong>)<br>
+          5. Clique em <strong>"Extrair itens"</strong>
+        </span>
+      </div>
+
+      <button class="btn primary" id="btn-abrir-fazenda" onclick="abrirFazendaDetalhar()"
+        style="width:100%;margin-bottom:14px;padding:10px;">
+        🔗 Abrir portal da Fazenda
+      </button>
+
+      <div style="margin-bottom:6px;font-size:12px;font-weight:600;color:var(--muted);">Cole o texto copiado da página da Fazenda:</div>
+      <textarea id="txt-fazenda"
+        placeholder="Selecione tudo na página da Fazenda (Ctrl+A), copie (Ctrl+C) e cole aqui (Ctrl+V)..."
+        style="width:100%;height:200px;padding:12px;border:1px solid var(--border2);border-radius:var(--r-sm);font-size:12px;font-family:monospace;background:var(--bg);color:var(--text);resize:vertical;line-height:1.5;"></textarea>
+
+      <div style="margin-top:12px;display:flex;gap:10px;">
+        <button class="btn primary" onclick="extrairItensTexto()" style="flex:1;padding:9px;">✓ Extrair itens</button>
+        <button class="btn" onclick="closeDetalhar()">Cancelar</button>
+      </div>
+
+      <div id="detalhar-resultado" style="display:none;margin-top:16px;"></div>
+    </div>
+  </div>
+</div>
+
 <div class="toasts" id="toasts"></div>
 
 <script>
@@ -906,7 +948,10 @@ function renderDocs(){
       <td class="tr mono" style="font-weight:600;color:var(--blue-d)">${brl(d.valorNota)}</td>
       ${chaveCell}
       ${linkCell}
-      <td><button class="btn sm" onclick="openPanel('${d.id}')">ver</button></td>
+      <td style="white-space:nowrap;">
+        <button class="btn sm" onclick="openPanel('${d.id}')">ver</button>
+        ${d.fonte==='PDF'?`<button class="btn sm" style="margin-left:4px;color:var(--blue-d);border-color:var(--blue);" onclick="openDetalhar('${d.id}')">📷 itens</button>`:''}
+      </td>
     </tr>`;
   }).join('');
 }
@@ -1075,6 +1120,113 @@ function exportXLSX(){
 function brl(v){if(!v&&v!==0)return'—';return'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});}
 function fmtD(s){if(!s)return'—';const[y,m,d]=s.split('-');return`${d}/${m}/${y}`;}
 function fmtCNPJ(s){if(!s)return'—';const d=s.replace(/\D/g,'');if(d.length===14)return`${d.slice(0,2)}.${d.slice(2,5)}.${d.slice(5,8)}/${d.slice(8,12)}-${d.slice(12)}`;if(d.length===11)return`${d.slice(0,3)}.${d.slice(3,6)}.${d.slice(6,9)}-${d.slice(9)}`;return s;}
+// ─── Detalhar itens PDF via texto da Fazenda ─────────────────────────────────
+let detalharDocId = null;
+
+function openDetalhar(id) {
+  detalharDocId = id;
+  const d = docs.find(x=>x.id===id);
+  document.getElementById('detalhar-sub').textContent = d ? `${d.emissor} · ${d.arquivo}` : '—';
+  document.getElementById('txt-fazenda').value = '';
+  document.getElementById('detalhar-resultado').style.display = 'none';
+  const modal = document.getElementById('modal-detalhar');
+  modal.style.display = 'flex';
+  modal.classList.add('open');
+}
+
+function closeDetalhar() {
+  const modal = document.getElementById('modal-detalhar');
+  modal.style.display = 'none';
+  modal.classList.remove('open');
+}
+
+function maybeCloseDetalhar(e) {
+  if (e.target === document.getElementById('modal-detalhar')) closeDetalhar();
+}
+
+function abrirFazendaDetalhar() {
+  const d = docs.find(x=>x.id===detalharDocId);
+  if (!d) return;
+  const url = consultaURL(d);
+  if (url) {
+    window.open(url, '_blank');
+  } else {
+    toast('Chave de acesso não encontrada nesta nota', 'err');
+  }
+}
+
+function extrairItensTexto() {
+  const texto = document.getElementById('txt-fazenda').value.trim();
+  if (!texto) { toast('Cole o texto da Fazenda primeiro', 'err'); return; }
+
+  const d = docs.find(x=>x.id===detalharDocId);
+  if (!d) return;
+
+  // Parser do formato da Fazenda RJ:
+  // "DESCRICAO (Código: XXXX ) VI. Total"
+  // "Qtde.:1  UN: UN  VI. Unit.: 0,01  0,01"
+  const itens = [];
+  const linhas = texto.split(/[\n\r]+/).map(l=>l.trim()).filter(Boolean);
+
+  let i = 0;
+  while (i < linhas.length) {
+    const l = linhas[i];
+
+    // Linha de produto: tem "(Código:" e "VI. Total"
+    const mProd = l.match(/^(.+?)\s*\(Código:\s*(\d+)\s*\).*VI\.\s*Total/i);
+    if (mProd) {
+      const descricao = mProd[1].trim();
+      const codigo    = mProd[2].trim();
+
+      // Próxima linha: Qtde.:X  UN: UN  VI. Unit.: X,XX  X,XX
+      let quantidade=1, valorUnitario=0, valorTotal=0;
+      if (i+1 < linhas.length) {
+        const lq = linhas[i+1];
+        const mQ = lq.match(/Qtde?\.\s*[:\-]?\s*([\d,\.]+)/i);
+        const mU = lq.match(/VI\.\s*Unit\.\s*[:\-]?\s*([\d,\.]+)/i);
+        const mT = lq.match(/([\d\.]+,\d{2})\s*$/);
+        if (mQ) quantidade    = parseFloat(mQ[1].replace(',','.'));
+        if (mU) valorUnitario = parseFloat(mU[1].replace(',','.'));
+        if (mT) valorTotal    = parseFloat(mT[1].replace('.','').replace(',','.'));
+        i += 2;
+      } else { i++; }
+
+      if (valorTotal > 0 || valorUnitario > 0) {
+        if (!valorTotal && valorUnitario) valorTotal = quantidade * valorUnitario;
+        itens.push({ codigo, descricao, ncm:'', cfop:'', unidade:'UN', quantidade, valorUnitario, valorTotal, desconto:0 });
+      }
+      continue;
+    }
+    i++;
+  }
+
+  if (!itens.length) {
+    // Tenta formato alternativo — busca padrões de valor no texto
+    toast('Não foi possível extrair itens. Verifique se copiou o texto completo da Fazenda.', 'err');
+    return;
+  }
+
+  // Atualiza o documento com os itens extraídos
+  d.itens = itens;
+  const res = document.getElementById('detalhar-resultado');
+  res.style.display = 'block';
+  res.innerHTML = `
+    <div style="background:var(--teal-l);border-radius:var(--r-sm);padding:12px;font-size:13px;color:var(--teal-d);">
+      ✓ <strong>${itens.length} item(s)</strong> extraído(s) com sucesso!
+      <table class="items-tbl" style="margin-top:10px;">
+        <thead><tr><th>Código</th><th>Descrição</th><th>Qtd</th><th>Unit.</th><th>Total</th></tr></thead>
+        <tbody>${itens.map(it=>`<tr>
+          <td>${it.codigo}</td><td>${it.descricao}</td>
+          <td>${it.quantidade}</td>
+          <td>${brl(it.valorUnitario)}</td>
+          <td>${brl(it.valorTotal)}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+      <button class="btn primary" onclick="closeDetalhar();renderDocs();" style="margin-top:12px;width:100%;">Fechar e atualizar documentos</button>
+    </div>`;
+  toast(`${itens.length} itens extraídos!`, 'ok');
+}
+
 function r2(v){return Math.round(v*100)/100;}
 function toast(msg,type){const t=document.createElement('div');t.className='toast '+type;t.textContent=msg;document.getElementById('toasts').appendChild(t);setTimeout(()=>t.remove(),3200);}
 </script>
