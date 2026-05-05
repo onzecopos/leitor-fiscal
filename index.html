@@ -531,7 +531,7 @@ function go(p) {
   document.querySelectorAll('.nav-btn').forEach((b,i) => b.classList.toggle('active', ['upload','docs','dashboard'][i]===p));
   document.querySelectorAll('.page').forEach(el => el.classList.remove('active'));
   document.getElementById('p-'+p).classList.add('active');
-  if (p==='docs') renderDocs();
+  if (p==='docs') { currentPage=0; renderDocs(); }
   if (p==='dashboard') renderDash();
 }
 
