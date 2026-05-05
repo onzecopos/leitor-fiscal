@@ -966,7 +966,11 @@ async function parsePDF(file) {
   };
 }
 
-function setDateMode(v,btn){dateMode=v;document.querySelectorAll('#p-docs .seg-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderDocs();}
+// ─── Docs table com paginação ────────────────────────────────────────────────
+const PAGE_SIZE = 100;
+let currentPage = 0;
+
+function setDateMode(v,btn){dateMode=v;document.querySelectorAll('#p-docs .seg-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentPage=0;renderDocs();}
 function setDashMode(v,btn){dashMode=v;document.querySelectorAll('#p-dashboard .seg-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderDash();}
 
 function getFilteredDocs(){
@@ -982,60 +986,29 @@ function getFilteredDocs(){
   });
 }
 
-function consultaURL(d) {
-  if (!d.chave || d.chave.length !== 44) return '';
-  const cUF = d.chave.slice(0,2);
-  const portais = {
-    '35':'https://www.nfce.fazenda.sp.gov.br/consulta',
-    '33':'https://consultadfe.fazenda.rj.gov.br/consultaDFe/paginas/consultaChaveAcesso.faces',
-    '41':'https://www.nfce.fazenda.pr.gov.br/nfce/consulta',
-    '43':'https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx',
-    '31':'https://nfce.fazenda.mg.gov.br/portalnfce',
-    '29':'https://www.sefaz.ba.gov.br/nfce/consulta',
-    '23':'http://www.sefaz.ce.gov.br/Content/aplicacao/nfce/consulta',
-    '53':'https://www.sefaz.df.gov.br/nfce/consulta',
-    '52':'https://www.nfce.go.gov.br/post/ver_nfce_consulta_identificada.aspx',
-    '21':'https://sistemas.sefaz.ma.gov.br/nfceweb/consulta',
-    '50':'https://www.dfe.ms.gov.br/nfce/consulta',
-    '51':'https://www.sefaz.mt.gov.br/nfce/consulta',
-    '15':'https://app.sefa.pa.gov.br/nfce/consulta',
-    '25':'https://www.nfce.fazenda.pb.gov.br/consulta',
-    '26':'https://nfce.sefaz.pe.gov.br/nfce-web/consulta',
-    '22':'https://www.sefaz.pi.gov.br/nfce/consulta',
-    '24':'https://nfce.set.rn.gov.br/portalDFE/NFCe/consulta',
-    '11':'https://www.nfce.sefin.ro.gov.br/consulta',
-    '14':'https://www.sefaz.rr.gov.br/nfce/consulta',
-    '42':'https://www.sef.sc.gov.br/nfce/consulta',
-    '28':'https://www.nfce.se.gov.br/consulta',
-    '17':'https://www.sefaz.to.gov.br/nfce/consulta',
-    '13':'https://sistemas.sefaz.am.gov.br/nfceweb/consulta',
-    '16':'https://www.sefaz.ap.gov.br/nfce/consulta',
-    '12':'https://www.sefaznet.ac.gov.br/nfce/consulta',
-    '27':'https://www.nfce.sefaz.al.gov.br/consulta',
-  };
-  return portais[cUF] || '';
-}
-
 function renderDocs(){
   const filtered=getFilteredDocs();
   const body=document.getElementById('docs-body');
-  if(!filtered.length){body.innerHTML='<tr class="empty-row"><td colspan="11">Nenhum documento encontrado.</td></tr>';return;}
-  body.innerHTML=filtered.map(d=>{
+  const total=filtered.length;
+  const totalPages=Math.ceil(total/PAGE_SIZE)||1;
+  if(currentPage>=totalPages) currentPage=totalPages-1;
+  const start=currentPage*PAGE_SIZE;
+  const page=filtered.slice(start,start+PAGE_SIZE);
+
+  if(!page.length){
+    body.innerHTML=`<tr class="empty-row"><td colspan="11">Nenhum documento encontrado.</td></tr>`;
+    renderPagination(total,totalPages);
+    return;
+  }
+  body.innerHTML=page.map(d=>{
     const bc=d.fonte==='PDF'?'b-pdf':d.tipo==='NFC-e'?'b-nfce':'b-nfe';
     const d2=d.dataSaida&&d.dataSaida!==d.dataEmissao;
     const url=consultaURL(d);
-    const linkCell=url
-      ? `<td><a href="${url}" target="_blank" style="font-size:12px;color:var(--blue-d);text-decoration:none;font-weight:600;white-space:nowrap;" title="Consultar no portal da Fazenda">🔗 consultar</a></td>`
-      : `<td style="color:var(--light);font-size:12px;">—</td>`;
-    const chaveCell = d.chave
-      ? `<td>
-          <div style="display:flex;align-items:center;gap:6px;">
-            <span class="mono" style="font-size:10px;color:var(--muted);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${d.chave}">${d.chave.slice(0,20)}…</span>
-            <button class="btn sm" style="flex-shrink:0;padding:3px 8px;font-size:11px;" title="Copiar chave de acesso"
-              onclick="navigator.clipboard.writeText('${d.chave}').then(()=>toast('Chave copiada!','ok'))">📋</button>
-          </div>
-        </td>`
-      : `<td style="color:var(--light);font-size:12px;">—</td>`;
+    const linkCell=url?`<td><a href="${url}" target="_blank" style="font-size:12px;color:var(--blue-d);text-decoration:none;font-weight:600;white-space:nowrap;">🔗 consultar</a></td>`:`<td style="color:var(--light);font-size:12px;">—</td>`;
+    const chaveCell=d.chave?`<td><div style="display:flex;align-items:center;gap:6px;">
+      <span class="mono" style="font-size:10px;color:var(--muted);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${d.chave}">${d.chave.slice(0,20)}…</span>
+      <button class="btn sm" style="flex-shrink:0;padding:3px 8px;font-size:11px;" onclick="navigator.clipboard.writeText('${d.chave}').then(()=>toast('Chave copiada!','ok'))">📋</button>
+    </div></td>`:`<td style="color:var(--light);font-size:12px;">—</td>`;
     return `<tr>
       <td><span class="badge ${bc}">${d.tipo}</span></td>
       <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.emissor||'—'}</td>
@@ -1044,26 +1017,45 @@ function renderDocs(){
       <td class="mono" style="color:var(--muted)">${d.serie||'—'}</td>
       <td><div class="two-d"><span class="d1">${fmtD(d.dataEmissao)}</span>${d2?`<span class="d2">↳ saída: ${fmtD(d.dataSaida)}</span>`:''}</div></td>
       <td class="tr mono" style="font-weight:600;color:var(--blue-d)">${brl(d.valorNota)}</td>
-      ${chaveCell}
-      ${linkCell}
+      ${chaveCell}${linkCell}
       <td style="white-space:nowrap;">
         <button class="btn sm" onclick="openPanel('${d.id}')">ver</button>
         ${d.fonte==='PDF'?`<button class="btn sm" style="margin-left:4px;color:var(--blue-d);border-color:var(--blue);" onclick="openDetalhar('${d.id}')">📷 itens</button>`:''}
       </td>
     </tr>`;
   }).join('');
+  renderPagination(total,totalPages);
 }
 
-function limparDocs() {
-  if (!docs.length) { toast('Nenhum documento para apagar', 'err'); return; }
-  if (!confirm(`Apagar todos os ${docs.length} documento(s) importados nesta sessão?`)) return;
-  docs = [];
-  document.getElementById('doc-count').textContent = '0 documentos';
-  document.getElementById('log').style.display = 'none';
-  document.getElementById('log').innerHTML = '';
-  renderDocs();
-  toast('Todos os documentos foram apagados', 'ok');
+function renderPagination(total, totalPages) {
+  let el = document.getElementById('pagination');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'pagination';
+    el.style.cssText = 'display:flex;align-items:center;gap:10px;padding:12px 16px;border-top:1px solid var(--border);font-size:13px;color:var(--muted);flex-wrap:wrap;';
+    document.querySelector('.table-wrap').appendChild(el);
+  }
+  if (totalPages <= 1) { el.style.display='none'; return; }
+  el.style.display = 'flex';
+  const s = currentPage * PAGE_SIZE + 1;
+  const e = Math.min((currentPage + 1) * PAGE_SIZE, total);
+  el.innerHTML = `
+    <span>${s}–${e} de <strong>${total}</strong> documentos</span>
+    <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+      <button class="btn sm" onclick="changePage(0)" ${currentPage===0?'disabled':''}>««</button>
+      <button class="btn sm" onclick="changePage(${currentPage-1})" ${currentPage===0?'disabled':''}>‹</button>
+      <span style="padding:5px 10px;font-weight:600;font-size:12px;">${currentPage+1} / ${totalPages}</span>
+      <button class="btn sm" onclick="changePage(${currentPage+1})" ${currentPage===totalPages-1?'disabled':''}>›</button>
+      <button class="btn sm" onclick="changePage(${totalPages-1})" ${currentPage===totalPages-1?'disabled':''}>»»</button>
+    </div>`;
 }
+
+function changePage(p) {
+  currentPage = p;
+  renderDocs();
+  document.querySelector('.table-wrap').scrollIntoView({behavior:'smooth'});
+}
+
 
 function clearF(){['fi','ff','f-q'].forEach(id=>document.getElementById(id).value='');document.getElementById('f-tipo').value='';renderDocs();}
 
@@ -1187,43 +1179,58 @@ function barChart(elId,data,color){
 function exportXLSX(){
   const ds=getFilteredDocs();
   if(!ds.length){toast('Nenhum documento para exportar','err');return;}
-  const wb=XLSX.utils.book_new();
 
-  const header=['Tipo','Emissor','CNPJ','Nº','Série','Data Emissão','Data Saída/Entrada','Valor Nota','Desconto',
-    'Cód. Produto','Descrição Produto','Unidade','Quantidade','Valor Unit.','Valor Total Item','Chave de Acesso','Link Consulta','Arquivo'];
-  const rows=[header];
+  toast('Gerando Excel... aguarde','ok');
 
-  ds.forEach(d=>{
-    const url=consultaURL(d)||'';
-    if(d.itens.length===0){
-      rows.push([d.tipo,d.emissor,d.cnpj,d.numero,d.serie,d.dataEmissao,d.dataSaida,
-        d.valorNota,d.desconto,
-        '','','','','','',d.chave,url,d.arquivo]);
-    } else {
-      d.itens.forEach(i=>{
-        rows.push([d.tipo,d.emissor,d.cnpj,d.numero,d.serie,d.dataEmissao,d.dataSaida,
-          d.valorNota,d.desconto,
-          i.codigo,i.descricao,i.unidade,i.quantidade,i.valorUnitario,i.valorTotal,
-          d.chave,url,d.arquivo]);
-      });
+  // Usa setTimeout para não bloquear o toast
+  setTimeout(() => {
+    try {
+      const wb = XLSX.utils.book_new();
+
+      const header = ['Tipo','Emissor','CNPJ','Nº','Série','Data Emissão','Data Saída/Entrada',
+        'Valor Nota','Desconto','Cód. Produto','Descrição Produto','Unidade',
+        'Quantidade','Valor Unit.','Valor Total Item','Chave de Acesso','Link Consulta','Arquivo'];
+
+      // Monta rows diretamente sem objetos intermediários
+      const rows = [header];
+      for (const d of ds) {
+        const url = consultaURL(d) || '';
+        if (d.itens.length === 0) {
+          rows.push([d.tipo,d.emissor,d.cnpj,d.numero,d.serie,
+            d.dataEmissao,d.dataSaida,d.valorNota,d.desconto,
+            '','','','','','',d.chave,url,d.arquivo]);
+        } else {
+          for (const i of d.itens) {
+            rows.push([d.tipo,d.emissor,d.cnpj,d.numero,d.serie,
+              d.dataEmissao,d.dataSaida,d.valorNota,d.desconto,
+              i.codigo,i.descricao,i.unidade,i.quantidade,i.valorUnitario,i.valorTotal,
+              d.chave,url,d.arquivo]);
+          }
+        }
+      }
+
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws['!cols']=[{wch:8},{wch:30},{wch:18},{wch:8},{wch:6},{wch:14},{wch:18},
+        {wch:13},{wch:10},{wch:12},{wch:30},{wch:8},{wch:10},{wch:13},{wch:14},
+        {wch:44},{wch:60},{wch:35}];
+
+      // Link consulta como hiperlink (coluna índice 16)
+      for (let ri = 1; ri < rows.length; ri++) {
+        const url = rows[ri][16];
+        if (!url) continue;
+        const ref = XLSX.utils.encode_cell({r:ri, c:16});
+        ws[ref] = {v:url, t:'s', l:{Target:url, Tooltip:'Consultar no portal da Fazenda'}};
+      }
+
+      XLSX.utils.book_append_sheet(wb, ws, 'Notas Fiscais');
+
+      const filename = `notas_fiscais_${new Date().toISOString().slice(0,10)}.xlsx`;
+      XLSX.writeFile(wb, filename, {compression: true});
+      toast(`Excel gerado — ${rows.length-1} linha(s)!`, 'ok');
+    } catch(e) {
+      toast('Erro ao gerar Excel: ' + e.message, 'err');
     }
-  });
-
-  const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols']=[{wch:8},{wch:30},{wch:18},{wch:8},{wch:6},{wch:14},{wch:18},{wch:13},{wch:10},
-    {wch:12},{wch:30},{wch:8},{wch:10},{wch:13},{wch:14},{wch:44},{wch:60},{wch:35}];
-
-  // Link consulta como hiperlink clicável (coluna índice 16)
-  rows.slice(1).forEach((row,ri)=>{
-    const url=row[16];
-    if(!url) return;
-    const cellRef=XLSX.utils.encode_cell({r:ri+1,c:16});
-    ws[cellRef]={v:url,t:'s',l:{Target:url,Tooltip:'Consultar no portal da Fazenda'}};
-  });
-
-  XLSX.utils.book_append_sheet(wb,ws,'Notas Fiscais');
-  XLSX.writeFile(wb,`notas_fiscais_${new Date().toISOString().slice(0,10)}.xlsx`);
-  toast('Excel gerado!','ok');
+  }, 100);
 }
 
 function brl(v){if(!v&&v!==0)return'—';return'R$ '+Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumFractionDigits:2});}
