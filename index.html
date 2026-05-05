@@ -1361,18 +1361,22 @@ function exportXLSX(){
         {wch:13},{wch:10},{wch:12},{wch:30},{wch:8},{wch:10},{wch:13},{wch:14},
         {wch:44},{wch:60},{wch:35}];
 
-      // Link consulta como hiperlink (coluna índice 17)
-      for (let ri = 1; ri < rows.length; ri++) {
-        const url = rows[ri][17];
-        if (!url) continue;
-        const ref = XLSX.utils.encode_cell({r:ri, c:17});
-        ws[ref] = {v:url, t:'s', l:{Target:url, Tooltip:'Consultar no portal da Fazenda'}};
+      // Para arquivos grandes, hiperlinks causam erro no Excel
+      // Mantém URL como texto simples — funciona em qualquer tamanho
+      // (hiperlinks só para arquivos pequenos < 1000 linhas)
+      if (rows.length < 1000) {
+        for (let ri = 1; ri < rows.length; ri++) {
+          const url = rows[ri][17];
+          if (!url) continue;
+          const ref = XLSX.utils.encode_cell({r:ri, c:17});
+          ws[ref] = {v:url, t:'s', l:{Target:url, Tooltip:'Consultar no portal da Fazenda'}};
+        }
       }
 
       XLSX.utils.book_append_sheet(wb, ws, 'Notas Fiscais');
 
       const filename = `notas_fiscais_${new Date().toISOString().slice(0,10)}.xlsx`;
-      XLSX.writeFile(wb, filename, {compression: true});
+      XLSX.writeFile(wb, filename, {compression: true, bookSST: false});
       toast(`Excel gerado — ${rows.length-1} linha(s)!`, 'ok');
     } catch(e) {
       toast('Erro ao gerar Excel: ' + e.message, 'err');
