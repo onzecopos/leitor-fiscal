@@ -654,7 +654,16 @@ async function handleFiles(files, type) {
   setTimeout(() => { progressWrap.style.display = 'none'; }, 2000);
 
   const ok = processados - erros - ignorados;
-  log.innerHTML += `<div class="ok">> ✓ ${ok} importado(s)${ignorados>0?` · ${ignorados} cancelamento(s) processado(s)`:''}${erros>0?` · ${erros} com erro`:''} · Total na sessão: ${docs.length}.</div>`;
+  const cancelamentosNaoEncontrados = cancelamentosPendentes.size;
+  log.innerHTML += `<div class="ok">> ✓ ${ok} importado(s) · ${ignorados} cancelamento(s) processado(s)${erros>0?` · ${erros} com erro`:''} · Total na sessão: ${docs.length}.</div>`;
+  if (cancelamentosNaoEncontrados > 0) {
+    log.innerHTML += `<div class="err">> ⚠ ${cancelamentosNaoEncontrados} cancelamento(s) sem nota original correspondente no ZIP:</div>`;
+    cancelamentosPendentes.forEach(chave => {
+      log.innerHTML += `<div class="err" style="font-size:10px;padding-left:16px;">↳ chave: ${chave}</div>`;
+    });
+  }
+  const canceladasEncontradas = docs.filter(d=>d.cancelada).length;
+  log.innerHTML += `<div>> Notas marcadas como canceladas: ${canceladasEncontradas}</div>`;
   log.scrollTop = log.scrollHeight;
   document.getElementById('doc-count').textContent = docs.length + ' documentos';
   toast(`${ok} documento(s) importado(s)`, 'ok');
@@ -1182,7 +1191,7 @@ function renderDash(){
   const period=dts.length>=2?`${fmtD(dts[0])} – ${fmtD(dts[dts.length-1])}`:dts.length===1?fmtD(dts[0]):'—';
 
   document.getElementById('dash-stats').innerHTML=`
-    <div class="stat"><div class="stat-label">Total bruto</div><div class="stat-val">${brl(totalBruto)}</div><div class="stat-sub">${ds.length} notas · ${xmlC} XML · ${pdfC} PDF</div></div>
+    <div class="stat"><div class="stat-label">Total bruto</div><div class="stat-val">${brl(totalBruto)}</div><div class="stat-sub">${ds.length} notas (${validas.length} válidas · ${canceladas.length} canceladas)</div></div>
     <div class="stat" style="${canceladas.length?'border-color:var(--rose);background:var(--rose-l);':''}">
       <div class="stat-label" style="${canceladas.length?'color:var(--rose-d);':''}">Cancelamentos</div>
       <div class="stat-val" style="${canceladas.length?'color:var(--rose-d);':''}">− ${brl(totalCancelado)}</div>
