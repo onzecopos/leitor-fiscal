@@ -1171,7 +1171,7 @@ function renderDash(){
   const validas    = ds.filter(d=>!d.cancelada);
   const canceladas = ds.filter(d=>d.cancelada);
 
-  const totalBruto     = validas.reduce((s,d)=>s+d.valorNota,0);
+  const totalBruto     = ds.reduce((s,d)=>s+d.valorNota,0);
   const totalCancelado = canceladas.reduce((s,d)=>s+d.valorNota,0);
   const totalLiquido   = totalBruto - totalCancelado;
 
@@ -1182,13 +1182,13 @@ function renderDash(){
   const period=dts.length>=2?`${fmtD(dts[0])} – ${fmtD(dts[dts.length-1])}`:dts.length===1?fmtD(dts[0]):'—';
 
   document.getElementById('dash-stats').innerHTML=`
-    <div class="stat hi"><div class="stat-label">Total líquido</div><div class="stat-val">${brl(totalLiquido)}</div><div class="stat-sub">${validas.length} notas válidas</div></div>
-    <div class="stat"><div class="stat-label">Total bruto</div><div class="stat-val">${brl(totalBruto)}</div><div class="stat-sub">${xmlC} XML · ${pdfC} PDF</div></div>
+    <div class="stat"><div class="stat-label">Total bruto</div><div class="stat-val">${brl(totalBruto)}</div><div class="stat-sub">${ds.length} notas · ${xmlC} XML · ${pdfC} PDF</div></div>
     <div class="stat" style="${canceladas.length?'border-color:var(--rose);background:var(--rose-l);':''}">
       <div class="stat-label" style="${canceladas.length?'color:var(--rose-d);':''}">Cancelamentos</div>
       <div class="stat-val" style="${canceladas.length?'color:var(--rose-d);':''}">− ${brl(totalCancelado)}</div>
-      <div class="stat-sub">${canceladas.length} nota(s)</div>
+      <div class="stat-sub">${canceladas.length} nota(s) cancelada(s)</div>
     </div>
+    <div class="stat hi"><div class="stat-label">Total líquido</div><div class="stat-val">${brl(totalLiquido)}</div><div class="stat-sub">${validas.length} notas válidas</div></div>
     <div class="stat"><div class="stat-label">Período</div><div class="stat-val" style="font-size:${dts.length>=2?'12px':'18px'}">${period}</div><div class="stat-sub">${validas.length} registros</div></div>
   `;
 
