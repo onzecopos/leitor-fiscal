@@ -654,16 +654,22 @@ async function handleFiles(files, type) {
   setTimeout(() => { progressWrap.style.display = 'none'; }, 2000);
 
   const ok = processados - erros - ignorados;
-  const cancelamentosNaoEncontrados = cancelamentosPendentes.size;
+  const canceladasEncontradas = docs.filter(d=>d.cancelada).length;
+
+  // Verifica cancelamentos pendentes que não encontraram nota
+  cancelamentosPendentes.forEach(chave => {
+    cancelamentosOrfaos.push(chave);
+  });
+  cancelamentosPendentes.clear();
+
   log.innerHTML += `<div class="ok">> ✓ ${ok} importado(s) · ${ignorados} cancelamento(s) processado(s)${erros>0?` · ${erros} com erro`:''} · Total na sessão: ${docs.length}.</div>`;
-  if (cancelamentosNaoEncontrados > 0) {
-    log.innerHTML += `<div class="err">> ⚠ ${cancelamentosNaoEncontrados} cancelamento(s) sem nota original correspondente no ZIP:</div>`;
-    cancelamentosPendentes.forEach(chave => {
-      log.innerHTML += `<div class="err" style="font-size:10px;padding-left:16px;">↳ chave: ${chave}</div>`;
+  log.innerHTML += `<div>> Notas marcadas como canceladas: ${canceladasEncontradas}</div>`;
+  if (cancelamentosOrfaos.length > 0) {
+    log.innerHTML += `<div class="err">> ⚠ ${cancelamentosOrfaos.length} cancelamento(s) sem nota original no ZIP:</div>`;
+    cancelamentosOrfaos.forEach(chave => {
+      log.innerHTML += `<div class="err" style="font-size:10px;padding-left:16px;">↳ ${chave}</div>`;
     });
   }
-  const canceladasEncontradas = docs.filter(d=>d.cancelada).length;
-  log.innerHTML += `<div>> Notas marcadas como canceladas: ${canceladasEncontradas}</div>`;
   log.scrollTop = log.scrollHeight;
   document.getElementById('doc-count').textContent = docs.length + ' documentos';
   toast(`${ok} documento(s) importado(s)`, 'ok');
@@ -671,6 +677,7 @@ async function handleFiles(files, type) {
 
 // Chaves de cancelamento pendentes (nota ainda não importada)
 const cancelamentosPendentes = new Set();
+const cancelamentosOrfaos = []; // cancelamentos sem nota correspondente
 
 function parseXML(txt, filename) {
   const xml = new DOMParser().parseFromString(txt, 'application/xml');
@@ -687,12 +694,10 @@ function parseXML(txt, filename) {
     const isCancelamento = !tpEvento || tpEvento.textContent.includes('110111');
 
     if (chave && isCancelamento) {
-      // Tenta marcar a nota original como cancelada
       const notaOriginal = docs.find(d => d.chave === chave);
       if (notaOriginal) {
         notaOriginal.cancelada = true;
       } else {
-        // Guarda para aplicar quando a nota for importada
         cancelamentosPendentes.add(chave);
       }
     }
