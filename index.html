@@ -523,6 +523,8 @@ tbody tr:hover td{background:var(--blue-ll);}
 let docs = [];
 let dateMode = 'emissao';
 let dashMode = 'emissao';
+const PAGE_SIZE = 100;
+let currentPage = 0;
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -585,6 +587,7 @@ async function handleFiles(files, type) {
   const total = type === 'xml' ? xmlTasks.length : pdfTasks.length;
   let processados = 0;
   let erros = 0;
+  let ignorados = 0;
 
   const updateProgress = () => {
     const pct = total > 0 ? Math.round(processados / total * 100) : 100;
@@ -607,11 +610,19 @@ async function handleFiles(files, type) {
         try {
           const txt = await task.getText();
           const doc = parseXML(txt, task.nome);
+          // Verifica se há cancelamento pendente para essa nota
+          if (doc.chave && cancelamentosPendentes.has(doc.chave)) {
+            doc.cancelada = true;
+            cancelamentosPendentes.delete(doc.chave);
+          }
           docs.push(doc);
         } catch(e) {
-          erros++;
-          if (xmlTasks.length <= 100) { // só loga individualmente se não for enorme
-            log.innerHTML += `<div class="err">> ✗ ${task.nome} — ${e.message}</div>`;
+          if (e.message === 'cancelamento') ignorados++;
+          else erros++;
+          if (xmlTasks.length <= 100) {
+            if (e.message !== 'cancelamento') {
+              log.innerHTML += `<div class="err">> ✗ ${task.nome} — ${e.message}</div>`;
+            }
           }
         }
         processados++;
@@ -642,16 +653,43 @@ async function handleFiles(files, type) {
   progressBar.style.width = '100%';
   setTimeout(() => { progressWrap.style.display = 'none'; }, 2000);
 
-  const ok = processados - erros;
-  log.innerHTML += `<div class="ok">> ✓ ${ok} importado(s)${erros > 0 ? ` · ${erros} com erro` : ''}. Total na sessão: ${docs.length}.</div>`;
+  const ok = processados - erros - ignorados;
+  log.innerHTML += `<div class="ok">> ✓ ${ok} importado(s)${ignorados>0?` · ${ignorados} cancelamento(s) processado(s)`:''}${erros>0?` · ${erros} com erro`:''} · Total na sessão: ${docs.length}.</div>`;
   log.scrollTop = log.scrollHeight;
   document.getElementById('doc-count').textContent = docs.length + ' documentos';
   toast(`${ok} documento(s) importado(s)`, 'ok');
 }
 
+// Chaves de cancelamento pendentes (nota ainda não importada)
+const cancelamentosPendentes = new Set();
+
 function parseXML(txt, filename) {
   const xml = new DOMParser().parseFromString(txt, 'application/xml');
   if (xml.querySelector('parsererror')) throw new Error('XML inválido');
+
+  // Detecta XML de evento (cancelamento, carta de correção etc.)
+  if (xml.querySelector('procEventoNFe') || xml.querySelector('eventoNFe') || xml.querySelector('retEnvEvento')) {
+    // Extrai a chave de acesso da nota cancelada
+    const chaveEl = xml.querySelector('chNFe') || xml.querySelector('chaveNFe');
+    const chave = chaveEl ? chaveEl.textContent.replace(/\s/g,'') : '';
+
+    // Verifica se é cancelamento (tpEvento 110111)
+    const tpEvento = xml.querySelector('tpEvento');
+    const isCancelamento = !tpEvento || tpEvento.textContent.includes('110111');
+
+    if (chave && isCancelamento) {
+      // Tenta marcar a nota original como cancelada
+      const notaOriginal = docs.find(d => d.chave === chave);
+      if (notaOriginal) {
+        notaOriginal.cancelada = true;
+      } else {
+        // Guarda para aplicar quando a nota for importada
+        cancelamentosPendentes.add(chave);
+      }
+    }
+    throw new Error('cancelamento');
+  }
+
   const g = (...tags) => { for (const t of tags) { const el=xml.querySelector(t); if(el&&el.textContent.trim()) return el.textContent.trim(); } return ''; };
   const mod = g('mod');
   const tipo = mod==='65' ? 'NFC-e' : 'NF-e';
@@ -967,9 +1005,6 @@ async function parsePDF(file) {
 }
 
 // ─── Docs table com paginação ────────────────────────────────────────────────
-const PAGE_SIZE = 100;
-let currentPage = 0;
-
 function setDateMode(v,btn){dateMode=v;document.querySelectorAll('#p-docs .seg-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');currentPage=0;renderDocs();}
 function setDashMode(v,btn){dashMode=v;document.querySelectorAll('#p-dashboard .seg-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderDash();}
 
@@ -1002,6 +1037,7 @@ function renderDocs(){
   }
   body.innerHTML=page.map(d=>{
     const bc=d.fonte==='PDF'?'b-pdf':d.tipo==='NFC-e'?'b-nfce':'b-nfe';
+    const cancelStyle = d.cancelada ? 'opacity:0.5;text-decoration:line-through;' : '';
     const d2=d.dataSaida&&d.dataSaida!==d.dataEmissao;
     const url=consultaURL(d);
     const linkCell=url?`<td><a href="${url}" target="_blank" style="font-size:12px;color:var(--blue-d);text-decoration:none;font-weight:600;white-space:nowrap;">🔗 consultar</a></td>`:`<td style="color:var(--light);font-size:12px;">—</td>`;
@@ -1009,8 +1045,8 @@ function renderDocs(){
       <span class="mono" style="font-size:10px;color:var(--muted);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${d.chave}">${d.chave.slice(0,20)}…</span>
       <button class="btn sm" style="flex-shrink:0;padding:3px 8px;font-size:11px;" onclick="navigator.clipboard.writeText('${d.chave}').then(()=>toast('Chave copiada!','ok'))">📋</button>
     </div></td>`:`<td style="color:var(--light);font-size:12px;">—</td>`;
-    return `<tr>
-      <td><span class="badge ${bc}">${d.tipo}</span></td>
+    return `<tr style="${cancelStyle}">
+      <td><span class="badge ${bc}">${d.tipo}</span>${d.cancelada?` <span class="badge" style="background:var(--rose-l);color:var(--rose-d);margin-left:3px;">✕ cancelada</span>`:''}</td>
       <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${d.emissor||'—'}</td>
       <td class="mono">${fmtCNPJ(d.cnpj)}</td>
       <td class="mono" style="color:var(--muted)">${d.numero||'—'}</td>
@@ -1122,26 +1158,45 @@ function maybeClose(e){if(e.target===document.getElementById('overlay'))closePan
 function dashDocs(){
   const di=document.getElementById('di').value,df=document.getElementById('df').value;
   const campo=dashMode==='emissao'?'dataEmissao':'dataSaida';
-  return docs.filter(d=>{const dt=d[campo]||'';if(di&&dt<di)return false;if(df&&dt>df)return false;return true;});
+  return docs.filter(d=>{
+    const dt=d[campo]||'';
+    if(di&&dt<di)return false;
+    if(df&&dt>df)return false;
+    return true;
+  });
 }
 
 function renderDash(){
-  const ds=dashDocs();
-  const total=ds.reduce((s,d)=>s+d.valorNota,0);
-  const xmlC=ds.filter(d=>d.fonte==='XML').length,pdfC=ds.filter(d=>d.fonte==='PDF').length;
-  const avg=ds.length?total/ds.length:0;
-  const dts=ds.map(d=>d.dataEmissao).filter(Boolean).sort();
+  const ds = dashDocs();
+  const validas    = ds.filter(d=>!d.cancelada);
+  const canceladas = ds.filter(d=>d.cancelada);
+
+  const totalBruto     = validas.reduce((s,d)=>s+d.valorNota,0);
+  const totalCancelado = canceladas.reduce((s,d)=>s+d.valorNota,0);
+  const totalLiquido   = totalBruto - totalCancelado;
+
+  const xmlC=validas.filter(d=>d.fonte==='XML').length;
+  const pdfC=validas.filter(d=>d.fonte==='PDF').length;
+  const avg=validas.length?totalBruto/validas.length:0;
+  const dts=validas.map(d=>d.dataEmissao).filter(Boolean).sort();
   const period=dts.length>=2?`${fmtD(dts[0])} – ${fmtD(dts[dts.length-1])}`:dts.length===1?fmtD(dts[0]):'—';
+
   document.getElementById('dash-stats').innerHTML=`
-    <div class="stat hi"><div class="stat-label">Total gasto</div><div class="stat-val">${brl(total)}</div><div class="stat-sub">${ds.length} doc(s)</div></div>
-    <div class="stat"><div class="stat-label">Documentos</div><div class="stat-val">${ds.length}</div><div class="stat-sub">${xmlC} XML · ${pdfC} PDF</div></div>
-    <div class="stat"><div class="stat-label">Valor médio</div><div class="stat-val">${brl(avg)}</div><div class="stat-sub">por nota</div></div>
-    <div class="stat"><div class="stat-label">Período</div><div class="stat-val" style="font-size:${dts.length>=2?'12px':'18px'}">${period}</div><div class="stat-sub">${ds.length} registros</div></div>
+    <div class="stat hi"><div class="stat-label">Total líquido</div><div class="stat-val">${brl(totalLiquido)}</div><div class="stat-sub">${validas.length} notas válidas</div></div>
+    <div class="stat"><div class="stat-label">Total bruto</div><div class="stat-val">${brl(totalBruto)}</div><div class="stat-sub">${xmlC} XML · ${pdfC} PDF</div></div>
+    <div class="stat" style="${canceladas.length?'border-color:var(--rose);background:var(--rose-l);':''}">
+      <div class="stat-label" style="${canceladas.length?'color:var(--rose-d);':''}">Cancelamentos</div>
+      <div class="stat-val" style="${canceladas.length?'color:var(--rose-d);':''}">− ${brl(totalCancelado)}</div>
+      <div class="stat-sub">${canceladas.length} nota(s)</div>
+    </div>
+    <div class="stat"><div class="stat-label">Período</div><div class="stat-val" style="font-size:${dts.length>=2?'12px':'18px'}">${period}</div><div class="stat-sub">${validas.length} registros</div></div>
   `;
-  barChart('c-emi',byMonth(ds,'dataEmissao'),'b');
-  barChart('c-sai',byMonth(ds,'dataSaida'),'t');
+
+  barChart('c-emi',byMonth(validas,'dataEmissao'),'b');
+  barChart('c-sai',byMonth(validas,'dataSaida'),'t');
+
   const em={};
-  ds.forEach(d=>{const k=d.emissor||d.cnpj||'Desconhecido';em[k]=em[k]||{valor:0,qtd:0};em[k].valor+=d.valorNota;em[k].qtd++;});
+  validas.forEach(d=>{const k=d.emissor||d.cnpj||'Desconhecido';em[k]=em[k]||{valor:0,qtd:0};em[k].valor+=d.valorNota;em[k].qtd++;});
   const sorted=Object.entries(em).sort((a,b)=>b[1].valor-a[1].valor).slice(0,8);
   if(!sorted.length){document.getElementById('c-emit').innerHTML='<div class="no-data">Nenhum dado</div>';return;}
   const maxE=sorted[0][1].valor;
