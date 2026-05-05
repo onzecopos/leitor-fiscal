@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Leitor Fiscal</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@300;400;500;600;700&family=Nunito+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
@@ -329,7 +330,7 @@ tbody tr:hover td{background:var(--blue-ll);}
       <div class="drop-grid">
         <div class="drop" id="dz-xml" onclick="document.getElementById('f-xml').click()"
           ondragover="dzOver(event,'xml')" ondragleave="dzOut('xml')" ondrop="dzDrop(event,'xml')">
-          <input type="file" id="f-xml" accept=".xml" multiple style="display:none" onchange="handleFiles(this.files,'xml')">
+          <input type="file" id="f-xml" accept=".xml,.zip" multiple style="display:none" onchange="handleFiles(this.files,'xml')">
           <div class="drop-ico xml">
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
               <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6z" stroke="var(--teal-d)" stroke-width="1.6"/>
@@ -338,8 +339,9 @@ tbody tr:hover td{background:var(--blue-ll);}
             </svg>
           </div>
           <h3>Notas Fiscais XML</h3>
-          <p>NF-e (mod. 55) e NFC-e (mod. 65)<br>Múltiplos arquivos de uma vez</p>
+          <p>NF-e (mod. 55) e NFC-e (mod. 65)<br>Múltiplos arquivos ou pasta compactada (.zip)</p>
           <span class="drop-tag xml">.xml</span>
+          <span class="drop-tag xml" style="margin-left:4px;">.zip</span>
         </div>
         <div class="drop" id="dz-pdf" onclick="document.getElementById('f-pdf').click()"
           ondragover="dzOver(event,'pdf')" ondragleave="dzOut('pdf')" ondrop="dzDrop(event,'pdf')">
@@ -535,8 +537,36 @@ async function handleFiles(files, type) {
   const log = document.getElementById('log');
   log.style.display = 'block';
   const arr = Array.from(files);
-  log.innerHTML += `<div>> Processando ${arr.length} arquivo(s) ${type.toUpperCase()}…</div>`;
+  log.innerHTML += `<div>> Processando ${arr.length} arquivo(s)…</div>`;
+
   for (const f of arr) {
+    // ZIP contendo XMLs
+    if (f.name.toLowerCase().endsWith('.zip') && type === 'xml') {
+      log.innerHTML += `<div>> Descompactando ${f.name}…</div>`;
+      try {
+        const zip = await JSZip.loadAsync(f);
+        const xmlFiles = Object.values(zip.files).filter(zf =>
+          !zf.dir && zf.name.toLowerCase().endsWith('.xml')
+        );
+        log.innerHTML += `<div>> ${xmlFiles.length} XML(s) encontrado(s) em ${f.name}</div>`;
+        for (const zf of xmlFiles) {
+          const txt = await zf.async('text');
+          const nome = zf.name.split('/').pop(); // pega só o nome do arquivo
+          try {
+            const doc = parseXML(txt, nome);
+            docs.push(doc);
+            log.innerHTML += `<div class="ok">> ✓ ${nome} — ${doc.emissor} — ${brl(doc.valorNota)}</div>`;
+          } catch(e) {
+            log.innerHTML += `<div class="err">> ✗ ${nome} — ${e.message}</div>`;
+          }
+        }
+      } catch(e) {
+        log.innerHTML += `<div class="err">> ✗ Erro ao abrir ${f.name}: ${e.message}</div>`;
+      }
+      continue;
+    }
+
+    // XML ou PDF individual
     try {
       const doc = type==='xml' ? parseXML(await f.text(), f.name) : await parsePDF(f);
       docs.push(doc);
@@ -545,10 +575,11 @@ async function handleFiles(files, type) {
       log.innerHTML += `<div class="err">> ✗ ${f.name} — ${e.message}</div>`;
     }
   }
+
   log.innerHTML += `<div>> Total em sessão: ${docs.length} documento(s).</div>`;
   log.scrollTop = log.scrollHeight;
   document.getElementById('doc-count').textContent = docs.length + ' documentos';
-  toast(`${arr.length} arquivo(s) processado(s)`, 'ok');
+  toast(`Importação concluída — ${docs.length} doc(s) no total`, 'ok');
 }
 
 function parseXML(txt, filename) {
