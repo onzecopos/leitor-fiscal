@@ -1051,9 +1051,42 @@ function getFilteredDocs(){
   });
 }
 
+function consultaURL(d) {
+  if (!d.chave || d.chave.length !== 44) return '';
+  const cUF = d.chave.slice(0,2);
+  const portais = {
+    '35':'https://www.nfce.fazenda.sp.gov.br/consulta',
+    '33':'https://consultadfe.fazenda.rj.gov.br/consultaDFe/paginas/consultaChaveAcesso.faces',
+    '41':'https://www.nfce.fazenda.pr.gov.br/nfce/consulta',
+    '43':'https://www.sefaz.rs.gov.br/NFCE/NFCE-COM.aspx',
+    '31':'https://nfce.fazenda.mg.gov.br/portalnfce',
+    '29':'https://www.sefaz.ba.gov.br/nfce/consulta',
+    '23':'http://www.sefaz.ce.gov.br/Content/aplicacao/nfce/consulta',
+    '53':'https://www.sefaz.df.gov.br/nfce/consulta',
+    '52':'https://www.nfce.go.gov.br/post/ver_nfce_consulta_identificada.aspx',
+    '21':'https://sistemas.sefaz.ma.gov.br/nfceweb/consulta',
+    '50':'https://www.dfe.ms.gov.br/nfce/consulta',
+    '51':'https://www.sefaz.mt.gov.br/nfce/consulta',
+    '15':'https://app.sefa.pa.gov.br/nfce/consulta',
+    '25':'https://www.nfce.fazenda.pb.gov.br/consulta',
+    '26':'https://nfce.sefaz.pe.gov.br/nfce-web/consulta',
+    '22':'https://www.sefaz.pi.gov.br/nfce/consulta',
+    '24':'https://nfce.set.rn.gov.br/portalDFE/NFCe/consulta',
+    '11':'https://www.nfce.sefin.ro.gov.br/consulta',
+    '14':'https://www.sefaz.rr.gov.br/nfce/consulta',
+    '42':'https://www.sef.sc.gov.br/nfce/consulta',
+    '28':'https://www.nfce.se.gov.br/consulta',
+    '17':'https://www.sefaz.to.gov.br/nfce/consulta',
+    '13':'https://sistemas.sefaz.am.gov.br/nfceweb/consulta',
+    '16':'https://www.sefaz.ap.gov.br/nfce/consulta',
+    '12':'https://www.sefaznet.ac.gov.br/nfce/consulta',
+    '27':'https://www.nfce.sefaz.al.gov.br/consulta',
+  };
+  return portais[cUF] || '';
+}
+
 function renderDocs(){
   const filtered=getFilteredDocs();
-  console.log('renderDocs called, docs:', docs.length, 'filtered:', filtered.length, 'currentPage:', currentPage);
   const body=document.getElementById('docs-body');
   const total=filtered.length;
   const totalPages=Math.ceil(total/PAGE_SIZE)||1;
