@@ -1053,6 +1053,7 @@ function getFilteredDocs(){
 
 function renderDocs(){
   const filtered=getFilteredDocs();
+  console.log('renderDocs called, docs:', docs.length, 'filtered:', filtered.length, 'currentPage:', currentPage);
   const body=document.getElementById('docs-body');
   const total=filtered.length;
   const totalPages=Math.ceil(total/PAGE_SIZE)||1;
