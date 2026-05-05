@@ -685,21 +685,30 @@ function parseXML(txt, filename) {
 
   // Detecta XML de evento (cancelamento, carta de correção etc.)
   if (xml.querySelector('procEventoNFe') || xml.querySelector('eventoNFe') || xml.querySelector('retEnvEvento')) {
-    // Extrai a chave de acesso da nota cancelada
-    const chaveEl = xml.querySelector('chNFe') || xml.querySelector('chaveNFe');
-    const chave = chaveEl ? chaveEl.textContent.replace(/\s/g,'') : '';
+    // Extrai a chave de acesso — tenta múltiplos seletores
+    const chaveEl = xml.querySelector('chNFe') || xml.querySelector('chaveNFe') 
+                 || xml.querySelector('chave') || xml.querySelector('refNFe');
+    // Fallback: busca no texto completo por sequência de 44 dígitos
+    let chave = chaveEl ? chaveEl.textContent.replace(/\s/g,'') : '';
+    if (!chave || chave.length !== 44) {
+      const m = txt.replace(/\s/g,'').match(/\b(\d{44})\b/);
+      if (m) chave = m[1];
+    }
 
     // Verifica se é cancelamento (tpEvento 110111)
     const tpEvento = xml.querySelector('tpEvento');
     const isCancelamento = !tpEvento || tpEvento.textContent.includes('110111');
 
-    if (chave && isCancelamento) {
+    if (chave && chave.length === 44 && isCancelamento) {
       const notaOriginal = docs.find(d => d.chave === chave);
       if (notaOriginal) {
         notaOriginal.cancelada = true;
       } else {
         cancelamentosPendentes.add(chave);
       }
+    } else if (!chave || chave.length !== 44) {
+      // Não conseguiu extrair a chave — loga para investigação
+      cancelamentosPendentes.add('CHAVE_NAO_ENCONTRADA_' + filename);
     }
     throw new Error('cancelamento');
   }
@@ -1195,8 +1204,9 @@ function renderDash(){
   const dts=validas.map(d=>d.dataEmissao).filter(Boolean).sort();
   const period=dts.length>=2?`${fmtD(dts[0])} – ${fmtD(dts[dts.length-1])}`:dts.length===1?fmtD(dts[0]):'—';
 
+  const totalDocs = ds.length; // válidas + canceladas
   document.getElementById('dash-stats').innerHTML=`
-    <div class="stat"><div class="stat-label">Total bruto</div><div class="stat-val">${brl(totalBruto)}</div><div class="stat-sub">${ds.length} notas (${validas.length} válidas · ${canceladas.length} canceladas)</div></div>
+    <div class="stat"><div class="stat-label">Total bruto</div><div class="stat-val">${brl(totalBruto)}</div><div class="stat-sub">${totalDocs} notas (${validas.length} válidas · ${canceladas.length} canceladas)</div></div>
     <div class="stat" style="${canceladas.length?'border-color:var(--rose);background:var(--rose-l);':''}">
       <div class="stat-label" style="${canceladas.length?'color:var(--rose-d);':''}">Cancelamentos</div>
       <div class="stat-val" style="${canceladas.length?'color:var(--rose-d);':''}">− ${brl(totalCancelado)}</div>
