@@ -359,6 +359,15 @@ tbody tr:hover td{background:var(--blue-ll);}
         </div>
       </div>
       <div class="log-box" id="log"></div>
+      <div id="progress-wrap" style="display:none;margin-top:12px;">
+        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:6px;">
+          <span id="progress-label">Processando...</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div style="height:8px;background:var(--bg);border-radius:4px;overflow:hidden;border:1px solid var(--border);">
+          <div id="progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--blue-l),var(--blue));border-radius:4px;transition:width .3s;"></div>
+        </div>
+      </div>
     </div>
 
     <!-- DOCUMENTOS -->
@@ -536,12 +545,20 @@ function dzDrop(e,t){
 
 async function handleFiles(files, type) {
   const log = document.getElementById('log');
+  const progressWrap = document.getElementById('progress-wrap');
+  const progressBar  = document.getElementById('progress-bar');
+  const progressLbl  = document.getElementById('progress-label');
+  const progressPct  = document.getElementById('progress-pct');
+
   log.style.display = 'block';
   const arr = Array.from(files);
   log.innerHTML += `<div>> Processando ${arr.length} arquivo(s)…</div>`;
 
+  // Coleta todos os XMLs a processar (incluindo os de dentro de ZIPs)
+  const xmlTasks = []; // { nome, getText: () => Promise<string> }
+  const pdfTasks = []; // { file }
+
   for (const f of arr) {
-    // ZIP contendo XMLs
     if (f.name.toLowerCase().endsWith('.zip') && type === 'xml') {
       log.innerHTML += `<div>> Descompactando ${f.name}…</div>`;
       try {
@@ -550,37 +567,86 @@ async function handleFiles(files, type) {
           !zf.dir && zf.name.toLowerCase().endsWith('.xml')
         );
         log.innerHTML += `<div>> ${xmlFiles.length} XML(s) encontrado(s) em ${f.name}</div>`;
+        log.scrollTop = log.scrollHeight;
         for (const zf of xmlFiles) {
-          const txt = await zf.async('text');
-          const nome = zf.name.split('/').pop(); // pega só o nome do arquivo
-          try {
-            const doc = parseXML(txt, nome);
-            docs.push(doc);
-            log.innerHTML += `<div class="ok">> ✓ ${nome} — ${doc.emissor} — ${brl(doc.valorNota)}</div>`;
-          } catch(e) {
-            log.innerHTML += `<div class="err">> ✗ ${nome} — ${e.message}</div>`;
-          }
+          const nome = zf.name.split('/').pop();
+          xmlTasks.push({ nome, getText: () => zf.async('text') });
         }
       } catch(e) {
         log.innerHTML += `<div class="err">> ✗ Erro ao abrir ${f.name}: ${e.message}</div>`;
       }
-      continue;
-    }
-
-    // XML ou PDF individual
-    try {
-      const doc = type==='xml' ? parseXML(await f.text(), f.name) : await parsePDF(f);
-      docs.push(doc);
-      log.innerHTML += `<div class="ok">> ✓ ${f.name} — ${doc.emissor} — ${brl(doc.valorNota)}</div>`;
-    } catch(e) {
-      log.innerHTML += `<div class="err">> ✗ ${f.name} — ${e.message}</div>`;
+    } else if (f.name.toLowerCase().endsWith('.xml')) {
+      xmlTasks.push({ nome: f.name, getText: () => f.text() });
+    } else if (f.name.toLowerCase().endsWith('.pdf')) {
+      pdfTasks.push(f);
     }
   }
 
-  log.innerHTML += `<div>> Total em sessão: ${docs.length} documento(s).</div>`;
+  const total = type === 'xml' ? xmlTasks.length : pdfTasks.length;
+  let processados = 0;
+  let erros = 0;
+
+  const updateProgress = () => {
+    const pct = total > 0 ? Math.round(processados / total * 100) : 100;
+    progressBar.style.width = pct + '%';
+    progressPct.textContent = pct + '%';
+    progressLbl.textContent = `Processando ${processados} de ${total}...`;
+  };
+
+  if (total > 0) {
+    progressWrap.style.display = 'block';
+    updateProgress();
+  }
+
+  const LOTE = 50; // processa 50 por vez para não travar
+
+  if (type === 'xml' && xmlTasks.length > 0) {
+    for (let i = 0; i < xmlTasks.length; i += LOTE) {
+      const lote = xmlTasks.slice(i, i + LOTE);
+      for (const task of lote) {
+        try {
+          const txt = await task.getText();
+          const doc = parseXML(txt, task.nome);
+          docs.push(doc);
+        } catch(e) {
+          erros++;
+          if (xmlTasks.length <= 100) { // só loga individualmente se não for enorme
+            log.innerHTML += `<div class="err">> ✗ ${task.nome} — ${e.message}</div>`;
+          }
+        }
+        processados++;
+      }
+      updateProgress();
+      // Libera a thread entre lotes
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  if (type === 'pdf') {
+    for (const f of pdfTasks) {
+      try {
+        const doc = await parsePDF(f);
+        docs.push(doc);
+      } catch(e) {
+        erros++;
+        log.innerHTML += `<div class="err">> ✗ ${f.name} — ${e.message}</div>`;
+      }
+      processados++;
+      updateProgress();
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+
+  progressLbl.textContent = 'Concluído!';
+  progressPct.textContent = '100%';
+  progressBar.style.width = '100%';
+  setTimeout(() => { progressWrap.style.display = 'none'; }, 2000);
+
+  const ok = processados - erros;
+  log.innerHTML += `<div class="ok">> ✓ ${ok} importado(s)${erros > 0 ? ` · ${erros} com erro` : ''}. Total na sessão: ${docs.length}.</div>`;
   log.scrollTop = log.scrollHeight;
   document.getElementById('doc-count').textContent = docs.length + ' documentos';
-  toast(`Importação concluída — ${docs.length} doc(s) no total`, 'ok');
+  toast(`${ok} documento(s) importado(s)`, 'ok');
 }
 
 function parseXML(txt, filename) {
