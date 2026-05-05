@@ -1210,6 +1210,11 @@ function renderDash(){
   const validas    = ds.filter(d=>!d.cancelada);
   const canceladas = ds.filter(d=>d.cancelada);
 
+  // Total de cancelamentos = marcados nas notas + órfãos (sem nota correspondente)
+  const totalCancelNasSessao = canceladas.length + cancelamentosOrfaos.length;
+  // Total de notas importadas = docs + cancelamentos (que não entram em docs)
+  const totalNotasImportadas = docs.length + totalCancelamentosImportados;
+
   const totalBruto     = ds.reduce((s,d)=>s+d.valorNota,0);
   const totalCancelado = canceladas.reduce((s,d)=>s+d.valorNota,0);
   const totalLiquido   = totalBruto - totalCancelado;
@@ -1220,15 +1225,14 @@ function renderDash(){
   const dts=validas.map(d=>d.dataEmissao).filter(Boolean).sort();
   const period=dts.length>=2?`${fmtD(dts[0])} – ${fmtD(dts[dts.length-1])}`:dts.length===1?fmtD(dts[0]):'—';
 
-  const totalDocs = ds.length + totalCancelamentosImportados;
   document.getElementById('dash-stats').innerHTML=`
-    <div class="stat"><div class="stat-label">Total bruto</div><div class="stat-val">${brl(totalBruto)}</div><div class="stat-sub">${totalDocs} notas (${validas.length} válidas · ${canceladas.length} canceladas)</div></div>
-    <div class="stat" style="${canceladas.length?'border-color:var(--rose);background:var(--rose-l);':''}">
-      <div class="stat-label" style="${canceladas.length?'color:var(--rose-d);':''}">Cancelamentos</div>
-      <div class="stat-val" style="${canceladas.length?'color:var(--rose-d);':''}">− ${brl(totalCancelado)}</div>
-      <div class="stat-sub">${canceladas.length} nota(s) cancelada(s)</div>
+    <div class="stat"><div class="stat-label">Total bruto</div><div class="stat-val">${brl(totalBruto)}</div><div class="stat-sub">${totalNotasImportadas} arquivos (${docs.length} NF-e · ${totalCancelamentosImportados} cancelamentos)</div></div>
+    <div class="stat" style="${totalCancelNasSessao?'border-color:var(--rose);background:var(--rose-l);':''}">
+      <div class="stat-label" style="${totalCancelNasSessao?'color:var(--rose-d);':''}">Cancelamentos</div>
+      <div class="stat-val" style="${totalCancelNasSessao?'color:var(--rose-d);':''}">− ${brl(totalCancelado)}</div>
+      <div class="stat-sub">${totalCancelNasSessao} nota(s) cancelada(s)${cancelamentosOrfaos.length>0?` · ${cancelamentosOrfaos.length} sem nota orig.`:''}</div>
     </div>
-    <div class="stat hi"><div class="stat-label">Total líquido</div><div class="stat-val">${brl(totalLiquido)}</div><div class="stat-sub">${validas.length} notas válidas</div></div>
+    <div class="stat hi"><div class="stat-label">Total líquido</div><div class="stat-val">${brl(totalLiquido)}</div><div class="stat-sub">${validas.length} notas válidas (${docs.length} - ${canceladas.length} canceladas)</div></div>
     <div class="stat"><div class="stat-label">Período</div><div class="stat-val" style="font-size:${dts.length>=2?'12px':'18px'}">${period}</div><div class="stat-sub">${validas.length} registros</div></div>
   `;
 
