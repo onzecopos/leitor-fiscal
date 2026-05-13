@@ -460,6 +460,10 @@ tbody tr:hover td{background:var(--blue-ll);}
           <div id="c-emit"><div class="no-data">Nenhum dado</div></div>
         </div>
         <div class="chart-card wide">
+          <div class="chart-title">Faturamento por CFOP</div>
+          <div id="c-cfop"><div class="no-data">Nenhum dado</div></div>
+        </div>
+        <div class="chart-card wide">
           <div class="chart-title">Principais destinatários</div>
           <div id="c-dest"><div class="no-data">Nenhum dado</div></div>
         </div>
@@ -1316,6 +1320,37 @@ function renderDash(){
       <span style="font-size:11px;color:var(--muted);width:28px;text-align:right">${v.qtd}x</span>
     </div>`).join('');
 
+  // Faturamento por CFOP (agrupa por CFOP de cada item)
+  const cfopMap = {};
+  validas.forEach(d => {
+    d.itens.forEach(i => {
+      const cfop = i.cfop || 'Sem CFOP';
+      cfopMap[cfop] = cfopMap[cfop] || {valor:0, qtd:0};
+      cfopMap[cfop].valor += i.valorTotal;
+      cfopMap[cfop].qtd++;
+    });
+    // Notas sem itens detalhados — usa o valor da nota sem CFOP
+    if (d.itens.length === 0) {
+      cfopMap['Sem CFOP'] = cfopMap['Sem CFOP'] || {valor:0, qtd:0};
+      cfopMap['Sem CFOP'].valor += d.valorNota;
+      cfopMap['Sem CFOP'].qtd++;
+    }
+  });
+  const sortedCFOP = Object.entries(cfopMap).sort((a,b)=>b[1].valor-a[1].valor).slice(0,10);
+  if (!sortedCFOP.length) {
+    document.getElementById('c-cfop').innerHTML = '<div class="no-data">Nenhum dado</div>';
+  } else {
+    const maxC = sortedCFOP[0][1].valor;
+    document.getElementById('c-cfop').innerHTML = sortedCFOP.map(([k,v],i)=>`
+      <div class="bar-row">
+        <div class="bar-lbl wide" title="CFOP ${k}">${k}</div>
+        <div class="bar-track"><div class="bar-fill ${colors[i]||'b'}" style="width:${Math.round(v.valor/maxC*100)}%">
+          <span class="bar-v">${brl(v.valor)}</span>
+        </div></div>
+        <span style="font-size:11px;color:var(--muted);width:40px;text-align:right">${v.qtd} it.</span>
+      </div>`).join('');
+  }
+
   // Principais destinatários
   const dest={};
   validas.forEach(d=>{
@@ -1368,7 +1403,7 @@ function exportXLSX(){
       const wb = XLSX.utils.book_new();
 
       const header = ['Tipo','Situação','Emissor','CNPJ Emissor','Destinatário','CNPJ/CPF Dest.','Nº','Série','Data Emissão','Data Saída/Entrada',
-        'Valor Nota','Desconto','Cód. Produto','Descrição Produto','Unidade',
+        'Valor Nota','Desconto','Cód. Produto','Descrição Produto','CFOP','Unidade',
         'Quantidade','Valor Unit.','Valor Total Item','Chave de Acesso','Link Consulta','Arquivo'];
 
       const rows = [header];
@@ -1378,12 +1413,12 @@ function exportXLSX(){
         if (d.itens.length === 0) {
           rows.push([d.tipo,situacao,d.emissor,d.cnpj,d.destNome||'',d.destCNPJ||'',d.numero,d.serie,
             d.dataEmissao,d.dataSaida,d.valorNota,d.desconto,
-            '','','','','','',d.chave,url,d.arquivo]);
+            '','','','','','','',d.chave,url,d.arquivo]);
         } else {
           for (const i of d.itens) {
             rows.push([d.tipo,situacao,d.emissor,d.cnpj,d.destNome||'',d.destCNPJ||'',d.numero,d.serie,
               d.dataEmissao,d.dataSaida,d.valorNota,d.desconto,
-              i.codigo,i.descricao,i.unidade,i.quantidade,i.valorUnitario,i.valorTotal,
+              i.codigo,i.descricao,i.cfop||'',i.unidade,i.quantidade,i.valorUnitario,i.valorTotal,
               d.chave,url,d.arquivo]);
           }
         }
@@ -1391,14 +1426,14 @@ function exportXLSX(){
 
       const ws = XLSX.utils.aoa_to_sheet(rows);
       ws['!cols']=[{wch:8},{wch:10},{wch:30},{wch:18},{wch:28},{wch:18},{wch:8},{wch:6},{wch:14},{wch:18},
-        {wch:13},{wch:10},{wch:12},{wch:30},{wch:8},{wch:10},{wch:13},{wch:14},
+        {wch:13},{wch:10},{wch:12},{wch:30},{wch:8},{wch:8},{wch:10},{wch:13},{wch:14},
         {wch:44},{wch:60},{wch:35}];
 
       if (rows.length < 1000) {
         for (let ri = 1; ri < rows.length; ri++) {
-          const url = rows[ri][19];
+          const url = rows[ri][20];
           if (!url) continue;
-          const ref = XLSX.utils.encode_cell({r:ri, c:19});
+          const ref = XLSX.utils.encode_cell({r:ri, c:20});
           ws[ref] = {v:url, t:'s', l:{Target:url, Tooltip:'Consultar no portal da Fazenda'}};
         }
       }
