@@ -1281,8 +1281,14 @@ function renderDash(){
   // Total de notas importadas = docs + cancelamentos (que não entram em docs)
   const totalNotasImportadas = docs.length + totalCancelamentosImportados;
 
-  const totalBruto     = ds.reduce((s,d)=>s+d.valorNota,0);
-  const totalCancelado = canceladas.reduce((s,d)=>s+d.valorNota,0);
+  // Total usa soma dos itens (para bater com o faturamento por CFOP)
+  // Se a nota não tem itens detalhados, usa o valorNota
+  const somaItens = (d) => d.itens.length > 0
+    ? d.itens.reduce((s,i) => s + i.valorTotal, 0)
+    : d.valorNota;
+
+  const totalBruto     = ds.reduce((s,d)=>s+somaItens(d),0);
+  const totalCancelado = canceladas.reduce((s,d)=>s+somaItens(d),0);
   const totalLiquido   = totalBruto - totalCancelado;
 
   const xmlC=validas.filter(d=>d.fonte==='XML').length;
@@ -1373,7 +1379,12 @@ function renderDash(){
 
 function byMonth(ds,campo){
   const m={};
-  ds.forEach(d=>{const dt=d[campo];if(!dt)return;const k=dt.slice(0,7);m[k]=(m[k]||0)+d.valorNota;});
+  ds.forEach(d=>{
+    const dt=d[campo];if(!dt)return;
+    const k=dt.slice(0,7);
+    const v = d.itens.length > 0 ? d.itens.reduce((s,i)=>s+i.valorTotal,0) : d.valorNota;
+    m[k]=(m[k]||0)+v;
+  });
   return Object.fromEntries(Object.entries(m).sort());
 }
 
@@ -1403,7 +1414,8 @@ function exportXLSX(){
       const wb = XLSX.utils.book_new();
 
       const header = ['Tipo','Situação','Emissor','CNPJ Emissor','Destinatário','CNPJ/CPF Dest.','Nº','Série','Data Emissão','Data Saída/Entrada',
-        'Valor Nota','Desconto','Cód. Produto','Descrição Produto','CFOP','Unidade',
+        'Valor Nota','Valor Produtos','Desconto','Frete','ICMS','PIS','COFINS',
+        'Cód. Produto','Descrição Produto','CFOP','Unidade',
         'Quantidade','Valor Unit.','Valor Total Item','Chave de Acesso','Link Consulta','Arquivo'];
 
       const rows = [header];
@@ -1412,12 +1424,12 @@ function exportXLSX(){
         const situacao = d.cancelada ? 'Cancelada' : 'Válida';
         if (d.itens.length === 0) {
           rows.push([d.tipo,situacao,d.emissor,d.cnpj,d.destNome||'',d.destCNPJ||'',d.numero,d.serie,
-            d.dataEmissao,d.dataSaida,d.valorNota,d.desconto,
+            d.dataEmissao,d.dataSaida,d.valorNota,d.valorProd||'',d.desconto||'',d.frete||'',d.icms||'',d.pis||'',d.cofins||'',
             '','','','','','','',d.chave,url,d.arquivo]);
         } else {
           for (const i of d.itens) {
             rows.push([d.tipo,situacao,d.emissor,d.cnpj,d.destNome||'',d.destCNPJ||'',d.numero,d.serie,
-              d.dataEmissao,d.dataSaida,d.valorNota,d.desconto,
+              d.dataEmissao,d.dataSaida,d.valorNota,d.valorProd||'',d.desconto||'',d.frete||'',d.icms||'',d.pis||'',d.cofins||'',
               i.codigo,i.descricao,i.cfop||'',i.unidade,i.quantidade,i.valorUnitario,i.valorTotal,
               d.chave,url,d.arquivo]);
           }
@@ -1426,14 +1438,15 @@ function exportXLSX(){
 
       const ws = XLSX.utils.aoa_to_sheet(rows);
       ws['!cols']=[{wch:8},{wch:10},{wch:30},{wch:18},{wch:28},{wch:18},{wch:8},{wch:6},{wch:14},{wch:18},
-        {wch:13},{wch:10},{wch:12},{wch:30},{wch:8},{wch:8},{wch:10},{wch:13},{wch:14},
+        {wch:13},{wch:13},{wch:10},{wch:10},{wch:10},{wch:10},{wch:10},
+        {wch:12},{wch:30},{wch:8},{wch:8},{wch:10},{wch:13},{wch:14},
         {wch:44},{wch:60},{wch:35}];
 
       if (rows.length < 1000) {
         for (let ri = 1; ri < rows.length; ri++) {
-          const url = rows[ri][20];
+          const url = rows[ri][25];
           if (!url) continue;
-          const ref = XLSX.utils.encode_cell({r:ri, c:20});
+          const ref = XLSX.utils.encode_cell({r:ri, c:25});
           ws[ref] = {v:url, t:'s', l:{Target:url, Tooltip:'Consultar no portal da Fazenda'}};
         }
       }
