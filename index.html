@@ -1281,14 +1281,8 @@ function renderDash(){
   // Total de notas importadas = docs + cancelamentos (que não entram em docs)
   const totalNotasImportadas = docs.length + totalCancelamentosImportados;
 
-  // Total usa soma dos itens (para bater com o faturamento por CFOP)
-  // Se a nota não tem itens detalhados, usa o valorNota
-  const somaItens = (d) => d.itens.length > 0
-    ? d.itens.reduce((s,i) => s + i.valorTotal, 0)
-    : d.valorNota;
-
-  const totalBruto     = ds.reduce((s,d)=>s+somaItens(d),0);
-  const totalCancelado = canceladas.reduce((s,d)=>s+somaItens(d),0);
+  const totalBruto     = ds.reduce((s,d)=>s+d.valorNota,0);
+  const totalCancelado = canceladas.reduce((s,d)=>s+d.valorNota,0);
   const totalLiquido   = totalBruto - totalCancelado;
 
   const xmlC=validas.filter(d=>d.fonte==='XML').length;
@@ -1379,12 +1373,7 @@ function renderDash(){
 
 function byMonth(ds,campo){
   const m={};
-  ds.forEach(d=>{
-    const dt=d[campo];if(!dt)return;
-    const k=dt.slice(0,7);
-    const v = d.itens.length > 0 ? d.itens.reduce((s,i)=>s+i.valorTotal,0) : d.valorNota;
-    m[k]=(m[k]||0)+v;
-  });
+  ds.forEach(d=>{const dt=d[campo];if(!dt)return;const k=dt.slice(0,7);m[k]=(m[k]||0)+d.valorNota;});
   return Object.fromEntries(Object.entries(m).sort());
 }
 
